@@ -1,0 +1,11 @@
+[Unit]
+Description=World Cup Agents — poll The Odds API for 1X2 consensus odds
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO__
+ExecStart=__UV__ run --no-sync python -m worldcup_agents.ingest odds
+TimeoutStartSec=600

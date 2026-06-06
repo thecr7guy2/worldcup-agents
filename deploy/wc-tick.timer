@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the World Cup Agents tick every 30 minutes
+
+[Timer]
+# Every 30 minutes, on the hour and half-hour. Tight enough to catch the 3 h bet window
+# and the 2.5 h post-kickoff result delay; the tick is a free no-op when nothing is due.
+OnCalendar=*:0/30
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

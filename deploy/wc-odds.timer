@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll odds every 6 hours (4/day - well within The Odds API 500/mo free quota)
+
+[Timer]
+# At 00:00, 06:00, 12:00, 18:00. 1 credit per poll -> ~120/mo. Bump to 00/4 (6/day) if you
+# want fresher prices; you still have headroom under 500/mo.
+OnCalendar=00/6:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

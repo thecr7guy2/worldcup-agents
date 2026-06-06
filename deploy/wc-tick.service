@@ -1,0 +1,14 @@
+[Unit]
+Description=World Cup Agents — orchestrator tick (ingest, settle, resolve, brief, predict/bet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO__
+# --no-sync: the venv is built once at deploy; a scheduled run must never re-resolve deps.
+# WorkingDirectory is load-bearing: .env and worldcup.db are both resolved relative to cwd.
+ExecStart=__UV__ run --no-sync python -m worldcup_agents.orchestrate tick
+# A busy matchday briefs many fixtures via web search — give it room.
+TimeoutStartSec=3600
