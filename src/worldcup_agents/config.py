@@ -66,6 +66,11 @@ BANKRUPT_FLOOR = 10_000.0  # at/below this, the agent is bust
 REBUY_AMOUNT = 100_000.0  # a smaller "second life" granted on bust
 MAX_LIVES = 1  # number of re-buys allowed
 
+# Accuracy leaderboard scoring (DESIGN §6) — graded off the PREDICT step, stakes
+# ignored. A correct exact 90' scoreline doubles the reward of a correct outcome.
+POINTS_CORRECT_OUTCOME = 1  # right 1X2 result (winner / draw) but wrong score
+POINTS_CORRECT_SCORE = 2  # right exact 90-minute scoreline (supersedes the above)
+
 
 settings = Settings()
 

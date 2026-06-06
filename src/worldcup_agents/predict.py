@@ -95,7 +95,7 @@ def predict(
 
     prompt = f"""MATCH: {home} (home) vs {away} (away) — FIFA World Cup 2026.
 
-You predict the result over 90 minutes (a draw is a real outcome — extra time and \
+Predict the EXACT scoreline over 90 minutes (a draw is a real outcome — extra time and \
 penalties do NOT count here). Below is the shared, factual briefing. It contains NO \
 betting odds by design — judge on football merit alone.
 
@@ -104,9 +104,10 @@ betting odds by design — judge on football merit alone.
 --- END BRIEFING ---
 
 Respond with ONLY a JSON object, no other text:
-{{"winner": "home" | "draw" | "away", "confidence": <0.0-1.0>, "reasoning": "<2-4 \
-sentences on the key factors>"}}
-"home" = {home} win, "away" = {away} win, "draw" = level after 90 minutes."""
+{{"home_goals": <int ≥ 0>, "away_goals": <int ≥ 0>, "confidence": <0.0-1.0>, \
+"reasoning": "<2-4 sentences on the key factors>"}}
+home_goals/away_goals are {home}'s and {away}'s goals after 90 minutes (the winner \
+follows from them); confidence is how sure you are of the RESULT (win/draw/loss)."""
 
     text, call = complete(
         model.model_id,
@@ -123,9 +124,19 @@ sentences on the key factors>"}}
 
     data = _extract_json(text)
     try:
-        winner = Outcome(str(data["winner"]).strip().lower())
-    except (KeyError, ValueError):
-        raise LLMError(f"{model.name}: invalid winner in {data!r}")
+        home_goals = int(data["home_goals"])
+        away_goals = int(data["away_goals"])
+    except (KeyError, ValueError, TypeError):
+        raise LLMError(f"{model.name}: invalid/missing score in {data!r}")
+    if home_goals < 0 or away_goals < 0:
+        raise LLMError(f"{model.name}: negative goals in {data!r}")
+    # Derive the winner from the scoreline — one source of truth.
+    if home_goals > away_goals:
+        winner = Outcome.HOME
+    elif home_goals < away_goals:
+        winner = Outcome.AWAY
+    else:
+        winner = Outcome.DRAW
     confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
     reasoning = str(data.get("reasoning", "")).strip()
 
@@ -133,6 +144,8 @@ sentences on the key factors>"}}
         model_name=model.name,
         fixture_id=fixture.id,
         winner=winner,
+        pred_home_goals=home_goals,
+        pred_away_goals=away_goals,
         confidence=confidence,
         reasoning=reasoning,
         created_at=_now(),
@@ -285,9 +298,12 @@ def format_reasoning(
         stake = f"${b.stake:,.0f}" + (
             f" @ {b.odds_at_bet:.2f}" if b.odds_at_bet else ""
         )
+        score = (
+            f" {pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else ""
+        )
         lines.append(f"## {pred.model_name}")
         lines.append(
-            f"**Predict:** {pred.winner.value} (confidence {pred.confidence:.2f}) "
+            f"**Predict:** {pred.winner.value}{score} (confidence {pred.confidence:.2f}) "
             f"· **Bet:** {pick} {stake}\n"
         )
         lines.append(
@@ -305,13 +321,19 @@ def _cmd_predict(args: argparse.Namespace) -> None:
     home = db.get_team(conn, fixture.home_id).name
     away = db.get_team(conn, fixture.away_id).name
     print(f"Fixture {args.fixture_id}: {home} vs {away}\n")
-    print(f"{'model':<18}{'predict':<8}{'conf':<6}{'bet':<8}{'stake':>12}{'odds':>7}")
+    print(
+        f"{'model':<18}{'predict':<8}{'score':>6}{'conf':>7}"
+        f"{'bet':>7}{'stake':>12}{'odds':>7}"
+    )
     for pred, b in results:
         pick = b.pick.value if b.pick else "pass"
         odds = f"{b.odds_at_bet:.2f}" if b.odds_at_bet else "—"
+        score = (
+            f"{pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else "—"
+        )
         print(
-            f"{pred.model_name:<18}{pred.winner.value:<8}{pred.confidence:<6.2f}"
-            f"{pick:<8}{b.stake:>12,.0f}{odds:>7}"
+            f"{pred.model_name:<18}{pred.winner.value:<8}{score:>6}{pred.confidence:>7.2f}"
+            f"{pick:>7}{b.stake:>12,.0f}{odds:>7}"
         )
 
     if args.reasons:

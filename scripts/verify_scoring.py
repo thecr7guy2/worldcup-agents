@@ -9,12 +9,18 @@ penalties is graded WRONG (draw on the 90-minute score).
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from worldcup_agents import db
-from worldcup_agents.config import IDLE_DECAY, STARTING_BANKROLL
+from worldcup_agents.config import (
+    IDLE_DECAY,
+    POINTS_CORRECT_OUTCOME,
+    POINTS_CORRECT_SCORE,
+    STARTING_BANKROLL,
+)
 from worldcup_agents.leaderboard import accuracy_standings, bankroll_standings
 from worldcup_agents.models import (
     Bet,
@@ -149,40 +155,72 @@ def main() -> None:
     )
     record_result(conn, 803, 1, 1, extra_time=True, penalties=True, advanced_id=1)
 
-    def pred(model, fid, winner):
+    def pred(model, fid, hg, ag):
+        winner = Outcome.HOME if hg > ag else Outcome.AWAY if hg < ag else Outcome.DRAW
         db.upsert_prediction(
             conn,
             Prediction(
                 model_name=model,
                 fixture_id=fid,
                 winner=winner,
+                pred_home_goals=hg,
+                pred_away_goals=ag,
                 confidence=0.6,
                 reasoning="x",
                 created_at=NOW,
             ),
         )
 
-    # passer: 800 HOME (right), 801 DRAW (right), 803 HOME (WRONG — pens=draw) → 2/3
-    pred(passer, 800, Outcome.HOME)
-    pred(passer, 801, Outcome.DRAW)
-    pred(passer, 803, Outcome.HOME)
-    # bettor: 800 AWAY (wrong), 801 DRAW (right), 802 HOME (ignored, unfinished) → 1/2
-    pred(bettor, 800, Outcome.AWAY)
-    pred(bettor, 801, Outcome.DRAW)
-    pred(bettor, 802, Outcome.HOME)
+    # Actual 90' results: 800 = 2-1 (HOME), 801 = 0-0 (DRAW), 803 = 1-1 pens (DRAW),
+    # 802 = SCHEDULED (excluded).
+    # passer: 800 2-1 EXACT (+2), 801 1-1 outcome-only (+1), 803 2-1 wrong outcome (+0)
+    #         → points 3, exact 1, outcomes 2, total 3
+    pred(passer, 800, 2, 1)
+    pred(passer, 801, 1, 1)
+    pred(passer, 803, 2, 1)
+    # bettor: 800 0-2 wrong (+0), 801 0-0 EXACT (+2), 802 1-0 ignored (unfinished)
+    #         → points 2, exact 1, outcomes 1, total 2
+    pred(bettor, 800, 0, 2)
+    pred(bettor, 801, 0, 0)
+    pred(bettor, 802, 1, 0)
 
     acc = {r["model"]: r for r in accuracy_standings(conn)}
-    assert acc[passer]["correct"] == 2 and acc[passer]["total"] == 3, acc[passer]
-    assert abs(acc[passer]["hit_rate"] - 2 / 3) < 1e-9
-    assert acc[bettor]["correct"] == 1 and acc[bettor]["total"] == 2, acc[bettor]
-    # AC6: the §7 prediction counted as wrong (else passer would be 3/3).
-    assert acc[passer]["correct"] != 3
-    # ordering: passer (2 correct) ranks above bettor (1 correct).
+    assert acc[passer]["points"] == POINTS_CORRECT_SCORE + POINTS_CORRECT_OUTCOME
+    assert acc[passer]["exact"] == 1 and acc[passer]["outcomes"] == 2, acc[passer]
+    assert acc[passer]["total"] == 3 and abs(acc[passer]["hit_rate"] - 2 / 3) < 1e-9
+    assert acc[bettor]["points"] == POINTS_CORRECT_SCORE
+    assert acc[bettor]["exact"] == 1 and acc[bettor]["outcomes"] == 1, acc[bettor]
+    assert acc[bettor]["total"] == 2
+    # §7 carry-through: passer's 2-1 prediction on the 1-1-pens match scored 0 (a draw on
+    # 90'); if it had counted, points/outcomes would be higher than 3/2.
+    # ordering: passer (3 pts) ranks above bettor (2 pts).
     order = [r["model"] for r in accuracy_standings(conn)]
     assert order.index(passer) < order.index(bettor)
-    print(
-        "accuracy board (winner==result_90, unfinished excluded, §7 wrong, order): PASS"
+    print("accuracy board (exact=2 / outcome=1 / §7 wrong / unfinished excluded): PASS")
+
+    # --- Migration: an old-shape prediction table gains the score columns ---
+    mtmp = Path(tempfile.mkdtemp()) / "old.db"
+    raw = sqlite3.connect(mtmp)
+    raw.execute(
+        "CREATE TABLE prediction (model_name TEXT, fixture_id INTEGER, winner TEXT, "
+        "confidence REAL, reasoning TEXT, created_at TEXT, "
+        "PRIMARY KEY(model_name, fixture_id))"
     )
+    raw.execute(
+        "INSERT INTO prediction VALUES ('M', 1, 'home', 0.5, 'r', "
+        "'2026-06-11T00:00:00+00:00')"
+    )
+    raw.commit()
+    raw.close()
+    mconn = db.connect(mtmp)
+    db.init_db(mconn)  # must ALTER-add the columns, preserving the existing row
+    cols = {r["name"] for r in mconn.execute("PRAGMA table_info(prediction)")}
+    assert {"pred_home_goals", "pred_away_goals"} <= cols, cols
+    saved = mconn.execute(
+        "SELECT winner, pred_home_goals FROM prediction WHERE model_name='M'"
+    ).fetchone()
+    assert saved["winner"] == "home" and saved["pred_home_goals"] is None
+    print("migration: old prediction table gains score columns, row preserved: PASS")
 
     # AC7 bankroll board ordered desc.
     board = bankroll_standings(conn)

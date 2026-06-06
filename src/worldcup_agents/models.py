@@ -114,14 +114,25 @@ class OddsSnapshot(BaseModel):
 
 
 class Prediction(BaseModel):
-    """Step 1 — football judgment, made with odds HIDDEN."""
+    """Step 1 — football judgment, made with odds HIDDEN.
+
+    The model commits to a 90-minute scoreline; `winner` is derived from it (one
+    source of truth). The score feeds the accuracy leaderboard only — it never
+    enters the BET step. Goals are nullable so pre-scoreline rows still load.
+    """
 
     model_name: str
     fixture_id: int
     winner: Outcome
+    pred_home_goals: int | None = None
+    pred_away_goals: int | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
     created_at: datetime
+
+    @property
+    def has_score(self) -> bool:
+        return self.pred_home_goals is not None and self.pred_away_goals is not None
 
 
 class Bet(BaseModel):

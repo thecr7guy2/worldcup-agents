@@ -18,7 +18,8 @@ import argparse
 import sqlite3
 
 from . import db
-from .models import Competitor, MatchStatus
+from .config import POINTS_CORRECT_OUTCOME, POINTS_CORRECT_SCORE
+from .models import Competitor, Fixture, MatchStatus
 
 
 def bankroll_standings(conn: sqlite3.Connection) -> list[Competitor]:
@@ -27,36 +28,53 @@ def bankroll_standings(conn: sqlite3.Connection) -> list[Competitor]:
 
 
 def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
-    """Per-model correctness over fixtures with a known 90' result.
+    """Per-model weighted accuracy over fixtures with a known 90' result.
 
-    Returns dicts {model, correct, total, hit_rate}, ordered by correct count then
-    hit-rate. Predictions on unfinished/postponed fixtures are excluded.
+    Points (DESIGN §6, graded off the PREDICT step, stakes ignored): a correct exact
+    90' scoreline scores POINTS_CORRECT_SCORE; a correct outcome with the wrong score
+    scores POINTS_CORRECT_OUTCOME; a wrong outcome scores 0. Returns dicts
+    {model, points, exact, outcomes, total, hit_rate}, ordered by points then exact
+    then outcomes. Predictions on unfinished/postponed fixtures are excluded.
     """
-    results = {
-        fx.id: fx.result_90()
+    finished: dict[int, Fixture] = {
+        fx.id: fx
         for fx in db.list_fixtures(conn)
         if fx.status == MatchStatus.FINISHED and fx.result_90() is not None
     }
-    tally: dict[str, list[int]] = {}  # model -> [correct, total]
+    tally: dict[str, dict] = {}
     for p in db.list_predictions(conn):
-        outcome = results.get(p.fixture_id)
-        if outcome is None:
+        fx = finished.get(p.fixture_id)
+        if fx is None:
             continue  # no settled result for this fixture yet
-        t = tally.setdefault(p.model_name, [0, 0])
-        t[1] += 1
-        if p.winner == outcome:
-            t[0] += 1
+        t = tally.setdefault(
+            p.model_name, {"points": 0, "exact": 0, "outcomes": 0, "total": 0}
+        )
+        t["total"] += 1
+        exact = (
+            p.has_score
+            and p.pred_home_goals == fx.home_goals_90
+            and p.pred_away_goals == fx.away_goals_90
+        )
+        if exact:
+            t["exact"] += 1
+            t["outcomes"] += 1
+            t["points"] += POINTS_CORRECT_SCORE
+        elif p.winner == fx.result_90():
+            t["outcomes"] += 1
+            t["points"] += POINTS_CORRECT_OUTCOME
 
     rows = [
         {
             "model": m,
-            "correct": c,
-            "total": n,
-            "hit_rate": (c / n) if n else 0.0,
+            "points": t["points"],
+            "exact": t["exact"],
+            "outcomes": t["outcomes"],
+            "total": t["total"],
+            "hit_rate": (t["outcomes"] / t["total"]) if t["total"] else 0.0,
         }
-        for m, (c, n) in tally.items()
+        for m, t in tally.items()
     ]
-    rows.sort(key=lambda r: (r["correct"], r["hit_rate"]), reverse=True)
+    rows.sort(key=lambda r: (r["points"], r["exact"], r["outcomes"]), reverse=True)
     return rows
 
 
@@ -75,15 +93,18 @@ def _print_bankroll(conn: sqlite3.Connection) -> None:
 
 def _print_accuracy(conn: sqlite3.Connection) -> None:
     rows = accuracy_standings(conn)
-    print("Accuracy leaderboard — best predictor")
+    print("Accuracy leaderboard — best predictor (exact score = 2pts, outcome = 1pt)")
     if not rows:
         print("(no graded predictions yet)")
         return
-    print(f"{'#':<3}{'model':<18}{'correct':>9}{'total':>7}{'hit rate':>10}")
+    print(
+        f"{'#':<3}{'model':<18}{'points':>7}{'exact':>7}{'outcome':>9}"
+        f"{'total':>7}{'hit rate':>10}"
+    )
     for i, r in enumerate(rows, start=1):
         print(
-            f"{i:<3}{r['model']:<18}{r['correct']:>9}{r['total']:>7}"
-            f"{r['hit_rate']:>9.1%}"
+            f"{i:<3}{r['model']:<18}{r['points']:>7}{r['exact']:>7}{r['outcomes']:>9}"
+            f"{r['total']:>7}{r['hit_rate']:>9.1%}"
         )
 
 
