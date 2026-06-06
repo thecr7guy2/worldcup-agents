@@ -58,6 +58,10 @@ PREDICTION_MODELS: list[ModelSpec] = [
 INTELLIGENCE_MODEL: ModelSpec = ModelSpec("Intelligence", "deepseek/deepseek-v4-pro")
 
 
+# ---- Tournament structure ----
+GROUP_LETTERS = "ABCDEFGHIJKL"  # the 12 groups A..L
+
+
 # ---- Competition constants (all tunable in one place) ----
 STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
 MAX_STAKE_FRACTION = 0.25  # max fraction of current bankroll riskable per match
