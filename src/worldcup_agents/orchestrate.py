@@ -10,9 +10,10 @@ reach match N+1's briefing and never its own.
       1. ingest results   matches past kickoff + RESULT_DELAY, still unresolved
       2. settle bets      resolved fixtures that still have unsettled bets
       3. post-match       finished fixtures -> per-team recap + dossier fold (once/team)
-      4. idle decay       matchdays fully closed and not yet decayed
-      5. brief            scheduled fixtures inside the pre-match window (no briefing yet)
-      6. predict + bet    scheduled fixtures inside the bet window (briefing + odds present)
+      4. resolve bracket  fill knockout team ids from finished results (gates briefing)
+      5. idle decay       matchdays fully closed and not yet decayed
+      6. brief            scheduled fixtures inside the pre-match window (no briefing yet)
+      7. predict + bet    scheduled fixtures inside the bet window (briefing + odds present)
 
 Every stage is lazy/idempotent, so the tick is safe to run on any cadence and to
 overlap or resume after a crash. Per-fixture failures are caught and logged so one
@@ -28,7 +29,7 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from . import db, intelligence, predict, results, settlement
+from . import bracket, db, intelligence, predict, results, settlement
 from .config import (
     BET_LEAD_HOURS,
     BRIEF_LEAD_HOURS,
@@ -182,6 +183,7 @@ def _new_summary() -> dict:
         "results": 0,
         "settled": 0,
         "postprocessed": 0,
+        "resolved": 0,
         "decayed": 0,
         "briefed": 0,
         "predicted": 0,
@@ -221,7 +223,17 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"postmatch {f.id}: {e}")
 
-    # 4. Idle decay for fully-closed matchdays.
+    # 4. Resolve knockout bracket ids from freshly-ingested results (must precede brief:
+    #    a knockout fixture cannot be briefed until its sides are real team ids).
+    try:
+        counts = bracket.resolve_brackets(conn)
+        s["resolved"] = counts["r32"] + counts["winner_loser"]
+        if s["resolved"]:
+            fixtures = db.list_fixtures(conn)  # refresh: newly-filled knockouts visible
+    except Exception as e:  # noqa: BLE001
+        s["errors"].append(f"bracket: {e}")
+
+    # 5. Idle decay for fully-closed matchdays.
     for day in due_matchdays(conn, fixtures):
         try:
             settlement.apply_idle_decay(conn, day)
@@ -229,7 +241,7 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"decay {day}: {e}")
 
-    # 5. Build briefings for fixtures entering the pre-match window.
+    # 6. Build briefings for fixtures entering the pre-match window.
     for f in due_for_brief(conn, fixtures, now):
         try:
             intelligence.brief_fixture(conn, f.id)
@@ -237,7 +249,7 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"brief {f.id}: {e}")
 
-    # 6. Predict + bet for fixtures entering the bet window.
+    # 7. Predict + bet for fixtures entering the bet window.
     for f in due_for_bet(conn, fixtures, now):
         try:
             predict.run_fixture(conn, f.id)
@@ -257,8 +269,8 @@ def _cmd_tick(args: argparse.Namespace) -> None:
     s = tick(conn)
     print(
         f"tick — results:{s['results']} settled:{s['settled']} "
-        f"postmatch:{s['postprocessed']} decay:{s['decayed']} "
-        f"briefed:{s['briefed']} predicted:{s['predicted']}"
+        f"postmatch:{s['postprocessed']} resolved:{s['resolved']} "
+        f"decay:{s['decayed']} briefed:{s['briefed']} predicted:{s['predicted']}"
     )
     for err in s["errors"]:
         print(f"  ERROR {err}")
