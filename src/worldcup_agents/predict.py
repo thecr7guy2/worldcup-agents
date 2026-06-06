@@ -14,15 +14,13 @@ uninfluenced by the market. Confidence from Step 1 is the bridge into the stake.
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db
 from .config import MAX_STAKE_FRACTION, PREDICTION_MODELS, ModelSpec
-from .llm import LLMError, complete
+from .llm import LLMError, complete, extract_json
 from .models import Bet, Fixture, MatchBriefing, OddsSnapshot, Outcome, Prediction
 
 # Identical for all five competitors — the only thing held constant is the
@@ -50,28 +48,6 @@ every match bleeds money to the margin.
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _extract_json(text: str) -> dict:
-    """Pull the first JSON object out of a model reply (tolerates ``` fences / prose)."""
-    cleaned = re.sub(r"```(?:json)?|```", "", text).strip()
-    start = cleaned.find("{")
-    if start == -1:
-        raise LLMError(f"no JSON object in reply: {text[:200]!r}")
-    depth = 0
-    for i in range(start, len(cleaned)):
-        if cleaned[i] == "{":
-            depth += 1
-        elif cleaned[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(cleaned[start : i + 1])
-                except json.JSONDecodeError as e:
-                    raise LLMError(
-                        f"bad JSON in reply: {e}; {cleaned[start:i+1][:200]!r}"
-                    )
-    raise LLMError(f"unterminated JSON object in reply: {text[:200]!r}")
 
 
 # ---- Step 1: PREDICT (odds hidden) ---------------------------------------
@@ -122,7 +98,7 @@ follows from them); confidence is how sure you are of the RESULT (win/draw/loss)
     )
     db.log_model_call(conn, call)
 
-    data = _extract_json(text)
+    data = extract_json(text)
     try:
         home_goals = int(data["home_goals"])
         away_goals = int(data["away_goals"])
@@ -214,7 +190,7 @@ Respond with ONLY a JSON object, no other text:
     )
     db.log_model_call(conn, call)
 
-    data = _extract_json(text)
+    data = extract_json(text)
     raw_pick = str(data.get("pick", "pass")).strip().lower()
     stake = float(data.get("stake", 0) or 0)
     reasoning = str(data.get("reasoning", "")).strip()

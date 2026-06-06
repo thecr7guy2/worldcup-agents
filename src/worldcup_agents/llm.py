@@ -7,6 +7,8 @@ actual billed cost OpenRouter reports) ready to log for the technical report.
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from datetime import datetime, timezone
 
@@ -24,6 +26,32 @@ CHAT_URL = f"{OPENROUTER_BASE_URL}/chat/completions"
 
 class LLMError(RuntimeError):
     """Raised when an OpenRouter call fails or returns no usable content."""
+
+
+def extract_json(text: str) -> dict:
+    """Pull the first JSON object out of a model reply (tolerates ``` fences / prose).
+
+    Shared by every structured-output caller (predict, bet, result ingestion) so the
+    tolerance rules live in one place — the LLM-output boundary.
+    """
+    cleaned = re.sub(r"```(?:json)?|```", "", text).strip()
+    start = cleaned.find("{")
+    if start == -1:
+        raise LLMError(f"no JSON object in reply: {text[:200]!r}")
+    depth = 0
+    for i in range(start, len(cleaned)):
+        if cleaned[i] == "{":
+            depth += 1
+        elif cleaned[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(cleaned[start : i + 1])
+                except json.JSONDecodeError as e:
+                    raise LLMError(
+                        f"bad JSON in reply: {e}; {cleaned[start:i+1][:200]!r}"
+                    )
+    raise LLMError(f"unterminated JSON object in reply: {text[:200]!r}")
 
 
 def complete(
