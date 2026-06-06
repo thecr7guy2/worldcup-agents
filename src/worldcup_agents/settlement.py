@@ -27,7 +27,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import db
-from .config import BANKRUPT_FLOOR, MAX_LIVES, REBUY_AMOUNT
+from .config import BANKRUPT_FLOOR, IDLE_DECAY, MAX_LIVES, REBUY_AMOUNT
 from .models import (
     BankrollEntry,
     Bet,
@@ -201,6 +201,70 @@ def record_result(
     return fixture
 
 
+# ---- Idle-cash decay (anti-cowardice, DESIGN §5) -------------------------
+
+
+def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEntry]:
+    """Bleed `IDLE_DECAY` off each active competitor's UN-staked bankroll for one
+    matchday (UTC date, YYYY-MM-DD). Idempotent (skips an already-decayed matchday) and
+    atomic. Runs at matchday CLOSE — raises if any fixture that day is still unplayed,
+    since decaying before bets are placed would lock in an overstated idle base.
+
+    A pure passer bleeds the full rate; a competitor who risked capital bleeds only on
+    the remainder. Decay is a bleed, not a loss: it never triggers bust/elimination.
+    """
+    if db.matchday_decayed(conn, matchday):
+        return []
+
+    fixtures = db.fixtures_on_date(conn, matchday)
+    if not fixtures:
+        raise ValueError(f"no fixtures on {matchday}")
+    unfinished = [
+        f.id
+        for f in fixtures
+        if f.status not in (MatchStatus.FINISHED, MatchStatus.POSTPONED)
+    ]
+    if unfinished:
+        raise ValueError(
+            f"matchday {matchday} is not closed — fixtures still unplayed: {unfinished}. "
+            "Decay runs after the day's matches are settled."
+        )
+
+    staked = db.staked_by_model_on(conn, matchday)
+    at = _now()
+    updated: list[Competitor] = []
+    ledger: list[BankrollEntry] = []
+    for comp in db.list_competitors(conn):
+        if not comp.active:
+            continue  # eliminated competitors are frozen
+        idle = max(0.0, comp.bankroll - staked.get(comp.model_name, 0.0))
+        delta = round(-IDLE_DECAY * idle, 2)
+        if delta == 0:
+            continue
+        balance = comp.bankroll + delta
+        updated.append(
+            Competitor(
+                model_name=comp.model_name,
+                bankroll=balance,
+                lives_used=comp.lives_used,
+                active=comp.active,
+            )
+        )
+        ledger.append(
+            BankrollEntry(
+                model_name=comp.model_name,
+                at=at,
+                delta=delta,
+                balance_after=balance,
+                reason="idle_decay",
+                fixture_id=None,
+            )
+        )
+
+    db.record_idle_decay(conn, matchday, at.isoformat(), updated, ledger)
+    return ledger
+
+
 # ---- CLI -----------------------------------------------------------------
 
 
@@ -267,6 +331,21 @@ def _cmd_settle(args: argparse.Namespace) -> None:
         print(f"{c.model_name:<18}{c.bankroll:>16,.0f}{c.lives_used:>8}{status:>10}")
 
 
+def _cmd_decay(args: argparse.Namespace) -> None:
+    conn = db.connect()
+    db.init_db(conn)
+    if db.matchday_decayed(conn, args.matchday):
+        print(f"Matchday {args.matchday} already decayed — nothing to do.")
+        return
+    ledger = apply_idle_decay(conn, args.matchday)
+    print(f"Idle decay for {args.matchday} (rate {IDLE_DECAY:.3%}):\n")
+    print(f"{'model':<18}{'bleed':>14}{'bankroll':>16}")
+    for e in sorted(ledger, key=lambda x: x.model_name):
+        print(f"{e.model_name:<18}{e.delta:>+14,.2f}{e.balance_after:>16,.0f}")
+    if not ledger:
+        print("(no active competitors with idle cash)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="worldcup_agents.settlement")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -286,6 +365,10 @@ def main() -> None:
     s = sub.add_parser("settle", help="grade + apply all bets for a finished fixture")
     s.add_argument("fixture_id", type=int)
     s.set_defaults(func=_cmd_settle)
+
+    d = sub.add_parser("decay", help="apply idle-cash decay for a closed matchday")
+    d.add_argument("matchday", help="UTC date, YYYY-MM-DD")
+    d.set_defaults(func=_cmd_decay)
 
     args = parser.parse_args()
     args.func(args)

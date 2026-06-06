@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS bankroll_history (
     fixture_id    INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS matchday_decay (
+    matchday    TEXT PRIMARY KEY,                        -- UTC date, YYYY-MM-DD
+    applied_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS team_dossier (
     team_id      INTEGER PRIMARY KEY REFERENCES team(id),
     updated_at   TEXT NOT NULL,
@@ -556,6 +561,76 @@ def list_bankroll_history(
         (model_name,),
     ).fetchall()
     return [BankrollEntry(**dict(r)) for r in rows]
+
+
+def fixtures_on_date(conn: sqlite3.Connection, matchday: str) -> list[Fixture]:
+    """Return fixtures whose UTC kickoff date equals `matchday` (YYYY-MM-DD)."""
+    rows = conn.execute(
+        "SELECT id FROM fixture WHERE date(kickoff) = ? ORDER BY kickoff", (matchday,)
+    ).fetchall()
+    return [get_fixture(conn, r["id"]) for r in rows]
+
+
+def staked_by_model_on(conn: sqlite3.Connection, matchday: str) -> dict[str, float]:
+    """Total stake each model risked on a matchday's fixtures (UTC date)."""
+    rows = conn.execute(
+        "SELECT b.model_name AS m, COALESCE(SUM(b.stake), 0) AS staked "
+        "FROM bet b JOIN fixture f ON b.fixture_id = f.id "
+        "WHERE date(f.kickoff) = ? GROUP BY b.model_name",
+        (matchday,),
+    ).fetchall()
+    return {r["m"]: float(r["staked"]) for r in rows}
+
+
+def matchday_decayed(conn: sqlite3.Connection, matchday: str) -> bool:
+    """True if idle decay has already been applied (and marked) for this matchday."""
+    row = conn.execute(
+        "SELECT 1 FROM matchday_decay WHERE matchday = ?", (matchday,)
+    ).fetchone()
+    return row is not None
+
+
+def record_idle_decay(
+    conn: sqlite3.Connection,
+    matchday: str,
+    applied_at: str,
+    competitors: list[Competitor],
+    ledger: list[BankrollEntry],
+) -> None:
+    """Atomically apply one matchday's idle decay: update each competitor's bankroll,
+    append `idle_decay` ledger entries, and write the matchday marker — one commit."""
+    cur = conn.cursor()
+    for c in competitors:
+        cur.execute(
+            "UPDATE competitor SET bankroll = ? WHERE model_name = ?",
+            (c.bankroll, c.model_name),
+        )
+    for e in ledger:
+        cur.execute(
+            "INSERT INTO bankroll_history "
+            "(model_name, at, delta, balance_after, reason, fixture_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (e.model_name, e.at.isoformat(), e.delta, e.balance_after, e.reason, None),
+        )
+    cur.execute(
+        "INSERT OR IGNORE INTO matchday_decay (matchday, applied_at) VALUES (?, ?)",
+        (matchday, applied_at),
+    )
+    conn.commit()
+
+
+def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
+    """Return every persisted prediction (for the accuracy leaderboard tally)."""
+    rows = conn.execute(
+        "SELECT model_name, fixture_id, winner, confidence, reasoning, created_at "
+        "FROM prediction"
+    ).fetchall()
+    out: list[Prediction] = []
+    for row in rows:
+        d = dict(row)
+        d["winner"] = Outcome(d["winner"])
+        out.append(Prediction(**d))
+    return out
 
 
 # ---- Intelligence layer (dossiers / reports / briefings) -----------------
