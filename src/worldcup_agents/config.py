@@ -73,6 +73,14 @@ POINTS_CORRECT_SCORE = 2  # right exact 90-minute scoreline (supersedes the abov
 POINTS_CORRECT_ADVANCE = 1  # knockout only: correctly called who progressed (ET/pens);
 # stacks on top of the 90' points, independent of them
 
+# ---- Orchestrator scheduling windows (hours relative to kickoff) ----
+# Build a fixture's briefing within this many hours before kickoff:
+BRIEF_LEAD_HOURS = 24.0
+# Run predict+bet within this many hours before kickoff:
+BET_LEAD_HOURS = 3.0
+# Wait this long after kickoff before trying to ingest a result:
+RESULT_DELAY_HOURS = 2.5
+
 
 settings = Settings()
 

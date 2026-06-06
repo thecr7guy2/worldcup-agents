@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS matchday_decay (
     applied_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dossier_update (
+    fixture_id  INTEGER NOT NULL REFERENCES fixture(id), -- post-match recap folded into
+    team_id     INTEGER NOT NULL REFERENCES team(id),    -- this team's dossier, exactly once
+    at          TEXT NOT NULL,
+    PRIMARY KEY (fixture_id, team_id)
+);
+
 CREATE TABLE IF NOT EXISTS team_dossier (
     team_id      INTEGER PRIMARY KEY REFERENCES team(id),
     updated_at   TEXT NOT NULL,
@@ -658,6 +665,27 @@ def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
         "FROM prediction"
     ).fetchall()
     return [_row_to_prediction(dict(row)) for row in rows]
+
+
+def dossier_folded(conn: sqlite3.Connection, fixture_id: int, team_id: int) -> bool:
+    """True if this fixture's post-match recap has already been folded into the team's
+    dossier — the idempotency guard for the non-idempotent dossier update."""
+    row = conn.execute(
+        "SELECT 1 FROM dossier_update WHERE fixture_id = ? AND team_id = ?",
+        (fixture_id, team_id),
+    ).fetchone()
+    return row is not None
+
+
+def mark_dossier_folded(
+    conn: sqlite3.Connection, fixture_id: int, team_id: int, at: str
+) -> None:
+    """Record that this fixture's recap has been folded into the team's dossier."""
+    conn.execute(
+        "INSERT OR IGNORE INTO dossier_update (fixture_id, team_id, at) VALUES (?, ?, ?)",
+        (fixture_id, team_id, at),
+    )
+    conn.commit()
 
 
 # ---- Intelligence layer (dossiers / reports / briefings) -----------------
