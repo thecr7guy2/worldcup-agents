@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS prediction (
     winner          TEXT NOT NULL,
     pred_home_goals INTEGER,                             -- predicted 90' scoreline
     pred_away_goals INTEGER,
+    predicted_advance TEXT,                              -- knockout only: home/away who progresses
     confidence      REAL NOT NULL,
     reasoning       TEXT NOT NULL,
     created_at      TEXT NOT NULL,
@@ -206,6 +207,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Additive migrations for DBs created before a column existed (no data loss)."""
     _add_column_if_missing(conn, "prediction", "pred_home_goals", "INTEGER")
     _add_column_if_missing(conn, "prediction", "pred_away_goals", "INTEGER")
+    _add_column_if_missing(conn, "prediction", "predicted_advance", "TEXT")
 
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
@@ -413,14 +415,15 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO prediction "
         "(model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
-        " confidence, reasoning, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " predicted_advance, confidence, reasoning, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             p.model_name,
             p.fixture_id,
             p.winner.value,
             p.pred_home_goals,
             p.pred_away_goals,
+            p.predicted_advance.value if p.predicted_advance else None,
             p.confidence,
             p.reasoning,
             p.created_at.isoformat(),
@@ -429,21 +432,26 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
     conn.commit()
 
 
+def _row_to_prediction(d: dict) -> Prediction:
+    d["winner"] = Outcome(d["winner"])
+    if d.get("predicted_advance"):
+        d["predicted_advance"] = Outcome(d["predicted_advance"])
+    return Prediction(**d)
+
+
 def get_prediction(
     conn: sqlite3.Connection, model_name: str, fixture_id: int
 ) -> Prediction | None:
     """Fetch one model's prediction for a fixture, or None."""
     row = conn.execute(
         "SELECT model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
-        "confidence, reasoning, created_at "
+        "predicted_advance, confidence, reasoning, created_at "
         "FROM prediction WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
     ).fetchone()
     if not row:
         return None
-    d = dict(row)
-    d["winner"] = Outcome(d["winner"])
-    return Prediction(**d)
+    return _row_to_prediction(dict(row))
 
 
 def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
@@ -646,15 +654,10 @@ def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
     """Return every persisted prediction (for the accuracy leaderboard tally)."""
     rows = conn.execute(
         "SELECT model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
-        "confidence, reasoning, created_at "
+        "predicted_advance, confidence, reasoning, created_at "
         "FROM prediction"
     ).fetchall()
-    out: list[Prediction] = []
-    for row in rows:
-        d = dict(row)
-        d["winner"] = Outcome(d["winner"])
-        out.append(Prediction(**d))
-    return out
+    return [_row_to_prediction(dict(row)) for row in rows]
 
 
 # ---- Intelligence layer (dossiers / reports / briefings) -----------------

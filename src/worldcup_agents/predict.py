@@ -21,7 +21,15 @@ from pathlib import Path
 from . import db
 from .config import MAX_STAKE_FRACTION, PREDICTION_MODELS, ModelSpec
 from .llm import LLMError, complete, extract_json
-from .models import Bet, Fixture, MatchBriefing, OddsSnapshot, Outcome, Prediction
+from .models import (
+    Bet,
+    Fixture,
+    MatchBriefing,
+    OddsSnapshot,
+    Outcome,
+    Prediction,
+    Stage,
+)
 
 # Identical for all five competitors — the only thing held constant is the
 # mindset; the variable under test is the model. (DESIGN §5 "mindset induction".)
@@ -69,21 +77,33 @@ def predict(
         if existing:
             return existing
 
+    is_knockout = fixture.stage != Stage.GROUP
+    advance_field = '"advances": "home" | "away", ' if is_knockout else ""
+    advance_note = (
+        f'\nThis is a KNOCKOUT match: also give "advances" — who you think ultimately '
+        f"PROGRESSES counting extra time and penalties ({home}=home, {away}=away). It "
+        f"matters most when your 90-minute score is a DRAW; if your score is decisive, "
+        f"it is simply the winner."
+        if is_knockout
+        else ""
+    )
+
     prompt = f"""MATCH: {home} (home) vs {away} (away) — FIFA World Cup 2026.
 
 Predict the EXACT scoreline over 90 minutes (a draw is a real outcome — extra time and \
-penalties do NOT count here). Below is the shared, factual briefing. It contains NO \
-betting odds by design — judge on football merit alone.
+penalties do NOT count toward this score). Below is the shared, factual briefing. It \
+contains NO betting odds by design — judge on football merit alone.
 
 --- BRIEFING ---
 {briefing.content}
 --- END BRIEFING ---
 
 Respond with ONLY a JSON object, no other text:
-{{"home_goals": <int ≥ 0>, "away_goals": <int ≥ 0>, "confidence": <0.0-1.0>, \
-"reasoning": "<2-4 sentences on the key factors>"}}
-home_goals/away_goals are {home}'s and {away}'s goals after 90 minutes (the winner \
-follows from them); confidence is how sure you are of the RESULT (win/draw/loss)."""
+{{"home_goals": <int ≥ 0>, "away_goals": <int ≥ 0>, {advance_field}"confidence": \
+<0.0-1.0>, "reasoning": "<2-4 sentences on the key factors>"}}
+home_goals/away_goals are {home}'s and {away}'s goals after 90 minutes (the 90-minute \
+winner follows from them); confidence is how sure you are of the RESULT (win/draw/loss).\
+{advance_note}"""
 
     text, call = complete(
         model.model_id,
@@ -113,6 +133,21 @@ follows from them); confidence is how sure you are of the RESULT (win/draw/loss)
         winner = Outcome.AWAY
     else:
         winner = Outcome.DRAW
+
+    # Knockouts: who advances. A decisive 90' score forces the advancer (the winner);
+    # only a predicted 90' DRAW needs the model's explicit call.
+    predicted_advance: Outcome | None = None
+    if is_knockout:
+        if winner is not Outcome.DRAW:
+            predicted_advance = winner
+        else:
+            adv = str(data.get("advances", "")).strip().lower()
+            if adv not in {"home", "away"}:
+                raise LLMError(
+                    f"{model.name}: knockout 90'-draw needs 'advances' home/away in {data!r}"
+                )
+            predicted_advance = Outcome.HOME if adv == "home" else Outcome.AWAY
+
     confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
     reasoning = str(data.get("reasoning", "")).strip()
 
@@ -122,6 +157,7 @@ follows from them); confidence is how sure you are of the RESULT (win/draw/loss)
         winner=winner,
         pred_home_goals=home_goals,
         pred_away_goals=away_goals,
+        predicted_advance=predicted_advance,
         confidence=confidence,
         reasoning=reasoning,
         created_at=_now(),
@@ -277,10 +313,15 @@ def format_reasoning(
         score = (
             f" {pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else ""
         )
+        advance = (
+            f" · advances: {pred.predicted_advance.value}"
+            if pred.predicted_advance
+            else ""
+        )
         lines.append(f"## {pred.model_name}")
         lines.append(
-            f"**Predict:** {pred.winner.value}{score} (confidence {pred.confidence:.2f}) "
-            f"· **Bet:** {pick} {stake}\n"
+            f"**Predict:** {pred.winner.value}{score}{advance} "
+            f"(confidence {pred.confidence:.2f}) · **Bet:** {pick} {stake}\n"
         )
         lines.append(
             f"**Step 1 — prediction reasoning (odds hidden):**\n\n{pred.reasoning}\n"

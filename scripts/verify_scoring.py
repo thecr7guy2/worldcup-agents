@@ -17,6 +17,7 @@ from pathlib import Path
 from worldcup_agents import db
 from worldcup_agents.config import (
     IDLE_DECAY,
+    POINTS_CORRECT_ADVANCE,
     POINTS_CORRECT_OUTCOME,
     POINTS_CORRECT_SCORE,
     STARTING_BANKROLL,
@@ -155,7 +156,7 @@ def main() -> None:
     )
     record_result(conn, 803, 1, 1, extra_time=True, penalties=True, advanced_id=1)
 
-    def pred(model, fid, hg, ag):
+    def pred(model, fid, hg, ag, advances=None):
         winner = Outcome.HOME if hg > ag else Outcome.AWAY if hg < ag else Outcome.DRAW
         db.upsert_prediction(
             conn,
@@ -165,38 +166,60 @@ def main() -> None:
                 winner=winner,
                 pred_home_goals=hg,
                 pred_away_goals=ag,
+                predicted_advance=advances,
                 confidence=0.6,
                 reasoning="x",
                 created_at=NOW,
             ),
         )
 
-    # Actual 90' results: 800 = 2-1 (HOME), 801 = 0-0 (DRAW), 803 = 1-1 pens (DRAW),
-    # 802 = SCHEDULED (excluded).
-    # passer: 800 2-1 EXACT (+2), 801 1-1 outcome-only (+1), 803 2-1 wrong outcome (+0)
-    #         → points 3, exact 1, outcomes 2, total 3
+    # A finished knockout whose advancer is UNRESOLVED (advanced_id None) — advance must
+    # not score even when predicted (gate test).
+    db.upsert_fixture(
+        conn,
+        Fixture(
+            id=804,
+            stage=Stage.R16,
+            kickoff=datetime(2026, 7, 2, 19, 0, tzinfo=timezone.utc),
+            home_id=1,
+            away_id=2,
+        ),
+    )
+    record_result(conn, 804, 2, 1)  # decisive, but advanced_id left None
+
+    # Results: 800=2-1 HOME (group), 801=0-0 DRAW (group), 803=1-1 pens DRAW (R16, HOME
+    # advanced), 804=2-1 HOME (R16, advancer unresolved), 802=SCHEDULED (excluded).
+    # passer — the showcase: 800 EXACT (+2); 801 outcome (+1); 803 called the 1-1 DRAW
+    #   EXACT (+2) AND home advances CORRECT (+1).
     pred(passer, 800, 2, 1)
     pred(passer, 801, 1, 1)
-    pred(passer, 803, 2, 1)
-    # bettor: 800 0-2 wrong (+0), 801 0-0 EXACT (+2), 802 1-0 ignored (unfinished)
-    #         → points 2, exact 1, outcomes 1, total 2
+    pred(passer, 803, 1, 1, advances=Outcome.HOME)
+    # bettor: 800 wrong (+0); 801 EXACT (+2); 802 ignored (unfinished); 803 got the 90'
+    #   WRONG (2-1, +0) but called the advancer right (+1) — advance is INDEPENDENT.
     pred(bettor, 800, 0, 2)
     pred(bettor, 801, 0, 0)
     pred(bettor, 802, 1, 0)
+    pred(bettor, 803, 2, 1, advances=Outcome.HOME)
+    # edge: 804 EXACT (+2) + predicts home advances, but 804's advancer is unresolved → +0.
+    pred(edge, 804, 2, 1, advances=Outcome.HOME)
 
     acc = {r["model"]: r for r in accuracy_standings(conn)}
-    assert acc[passer]["points"] == POINTS_CORRECT_SCORE + POINTS_CORRECT_OUTCOME
-    assert acc[passer]["exact"] == 1 and acc[passer]["outcomes"] == 2, acc[passer]
-    assert acc[passer]["total"] == 3 and abs(acc[passer]["hit_rate"] - 2 / 3) < 1e-9
-    assert acc[bettor]["points"] == POINTS_CORRECT_SCORE
+    # passer: 2 + 1 + (2 + 1) = 6 ; exact 2 (800,803) ; outcomes 3 ; advance 1 ; total 3
+    assert acc[passer]["points"] == (
+        2 * POINTS_CORRECT_SCORE + POINTS_CORRECT_OUTCOME + POINTS_CORRECT_ADVANCE
+    ), acc[passer]
+    assert acc[passer]["exact"] == 2 and acc[passer]["outcomes"] == 3
+    assert acc[passer]["advance"] == 1 and acc[passer]["total"] == 3
+    # bettor: 0 + 2 + 0 + 1 = 3 ; 802 excluded → total 3 ; advance 1 despite wrong 90'.
+    assert acc[bettor]["points"] == POINTS_CORRECT_SCORE + POINTS_CORRECT_ADVANCE
     assert acc[bettor]["exact"] == 1 and acc[bettor]["outcomes"] == 1, acc[bettor]
-    assert acc[bettor]["total"] == 2
-    # §7 carry-through: passer's 2-1 prediction on the 1-1-pens match scored 0 (a draw on
-    # 90'); if it had counted, points/outcomes would be higher than 3/2.
-    # ordering: passer (3 pts) ranks above bettor (2 pts).
+    assert acc[bettor]["advance"] == 1 and acc[bettor]["total"] == 3
+    # edge: exact on 804 but advancer unresolved (advanced_id None) → no advance point.
+    assert acc[edge]["points"] == POINTS_CORRECT_SCORE and acc[edge]["advance"] == 0
+    # ordering by points: passer (6) > bettor (3).
     order = [r["model"] for r in accuracy_standings(conn)]
     assert order.index(passer) < order.index(bettor)
-    print("accuracy board (exact=2 / outcome=1 / §7 wrong / unfinished excluded): PASS")
+    print("accuracy board (exact / outcome / KO advance: independence + gate): PASS")
 
     # --- Migration: an old-shape prediction table gains the score columns ---
     mtmp = Path(tempfile.mkdtemp()) / "old.db"
@@ -215,7 +238,7 @@ def main() -> None:
     mconn = db.connect(mtmp)
     db.init_db(mconn)  # must ALTER-add the columns, preserving the existing row
     cols = {r["name"] for r in mconn.execute("PRAGMA table_info(prediction)")}
-    assert {"pred_home_goals", "pred_away_goals"} <= cols, cols
+    assert {"pred_home_goals", "pred_away_goals", "predicted_advance"} <= cols, cols
     saved = mconn.execute(
         "SELECT winner, pred_home_goals FROM prediction WHERE model_name='M'"
     ).fetchone()

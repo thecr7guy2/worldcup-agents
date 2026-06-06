@@ -126,6 +126,9 @@ class Prediction(BaseModel):
     winner: Outcome
     pred_home_goals: int | None = None
     pred_away_goals: int | None = None
+    # Knockouts only: which side the model thinks ultimately PROGRESSES (counting
+    # extra time / penalties). HOME or AWAY — never DRAW; None for group fixtures.
+    predicted_advance: Outcome | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
     created_at: datetime

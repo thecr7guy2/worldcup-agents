@@ -18,8 +18,12 @@ import argparse
 import sqlite3
 
 from . import db
-from .config import POINTS_CORRECT_OUTCOME, POINTS_CORRECT_SCORE
-from .models import Competitor, Fixture, MatchStatus
+from .config import (
+    POINTS_CORRECT_ADVANCE,
+    POINTS_CORRECT_OUTCOME,
+    POINTS_CORRECT_SCORE,
+)
+from .models import Competitor, Fixture, MatchStatus, Outcome
 
 
 def bankroll_standings(conn: sqlite3.Connection) -> list[Competitor]:
@@ -32,9 +36,11 @@ def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
 
     Points (DESIGN §6, graded off the PREDICT step, stakes ignored): a correct exact
     90' scoreline scores POINTS_CORRECT_SCORE; a correct outcome with the wrong score
-    scores POINTS_CORRECT_OUTCOME; a wrong outcome scores 0. Returns dicts
-    {model, points, exact, outcomes, total, hit_rate}, ordered by points then exact
-    then outcomes. Predictions on unfinished/postponed fixtures are excluded.
+    scores POINTS_CORRECT_OUTCOME; a wrong outcome scores 0. On knockouts, correctly
+    calling who PROGRESSES (ET/penalties) adds POINTS_CORRECT_ADVANCE — independent of
+    the 90' points (so a correct 1-1 draw + correct advancer scores both). Returns
+    {model, points, exact, outcomes, advance, total, hit_rate}, ordered by points then
+    exact then advance. Predictions on unfinished/postponed fixtures are excluded.
     """
     finished: dict[int, Fixture] = {
         fx.id: fx
@@ -47,7 +53,8 @@ def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
         if fx is None:
             continue  # no settled result for this fixture yet
         t = tally.setdefault(
-            p.model_name, {"points": 0, "exact": 0, "outcomes": 0, "total": 0}
+            p.model_name,
+            {"points": 0, "exact": 0, "outcomes": 0, "advance": 0, "total": 0},
         )
         t["total"] += 1
         exact = (
@@ -63,18 +70,29 @@ def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
             t["outcomes"] += 1
             t["points"] += POINTS_CORRECT_OUTCOME
 
+        # Knockout-only: who advanced (penalties count). Independent of the 90' points;
+        # gated on a resolved advancer, so group fixtures (advanced_id None) never score.
+        if fx.advanced_id is not None and p.predicted_advance is not None:
+            advanced_side = (
+                Outcome.HOME if fx.advanced_id == fx.home_id else Outcome.AWAY
+            )
+            if p.predicted_advance == advanced_side:
+                t["advance"] += 1
+                t["points"] += POINTS_CORRECT_ADVANCE
+
     rows = [
         {
             "model": m,
             "points": t["points"],
             "exact": t["exact"],
             "outcomes": t["outcomes"],
+            "advance": t["advance"],
             "total": t["total"],
             "hit_rate": (t["outcomes"] / t["total"]) if t["total"] else 0.0,
         }
         for m, t in tally.items()
     ]
-    rows.sort(key=lambda r: (r["points"], r["exact"], r["outcomes"]), reverse=True)
+    rows.sort(key=lambda r: (r["points"], r["exact"], r["advance"]), reverse=True)
     return rows
 
 
@@ -93,18 +111,21 @@ def _print_bankroll(conn: sqlite3.Connection) -> None:
 
 def _print_accuracy(conn: sqlite3.Connection) -> None:
     rows = accuracy_standings(conn)
-    print("Accuracy leaderboard — best predictor (exact score = 2pts, outcome = 1pt)")
+    print(
+        "Accuracy leaderboard — best predictor "
+        "(exact score = 2pts, outcome = 1pt, KO advancer = +1)"
+    )
     if not rows:
         print("(no graded predictions yet)")
         return
     print(
-        f"{'#':<3}{'model':<18}{'points':>7}{'exact':>7}{'outcome':>9}"
+        f"{'#':<3}{'model':<18}{'points':>7}{'exact':>7}{'outcome':>9}{'adv':>5}"
         f"{'total':>7}{'hit rate':>10}"
     )
     for i, r in enumerate(rows, start=1):
         print(
             f"{i:<3}{r['model']:<18}{r['points']:>7}{r['exact']:>7}{r['outcomes']:>9}"
-            f"{r['total']:>7}{r['hit_rate']:>9.1%}"
+            f"{r['advance']:>5}{r['total']:>7}{r['hit_rate']:>9.1%}"
         )
 
 
