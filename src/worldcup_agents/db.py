@@ -15,7 +15,9 @@ from .config import PREDICTION_MODELS, STARTING_BANKROLL
 import os
 
 from .models import (
+    BankrollEntry,
     Bet,
+    BetResult,
     Competitor,
     Fixture,
     MatchBriefing,
@@ -26,6 +28,7 @@ from .models import (
     PostMatchReport,
     Prediction,
     PreMatchReport,
+    Settlement,
     Stage,
     Team,
     TeamDossier,
@@ -457,6 +460,102 @@ def consensus_odds(conn: sqlite3.Connection, fixture_id: int) -> OddsSnapshot | 
         (fixture_id,),
     ).fetchone()
     return OddsSnapshot(**dict(row)) if row else None
+
+
+def list_bets(conn: sqlite3.Connection, fixture_id: int) -> list[Bet]:
+    """Return every persisted bet for a fixture, ordered by model (deterministic)."""
+    rows = conn.execute(
+        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, reasoning, created_at "
+        "FROM bet WHERE fixture_id = ? ORDER BY model_name",
+        (fixture_id,),
+    ).fetchall()
+    out: list[Bet] = []
+    for row in rows:
+        d = dict(row)
+        d["pick"] = Outcome(d["pick"]) if d["pick"] else None
+        out.append(Bet(**d))
+    return out
+
+
+# ---- Settlement & bankroll -----------------------------------------------
+
+
+def get_settlement(
+    conn: sqlite3.Connection, model_name: str, fixture_id: int
+) -> Settlement | None:
+    """Fetch one model's settlement for a fixture, or None. The idempotency guard."""
+    row = conn.execute(
+        "SELECT model_name, fixture_id, result, payout, pnl, settled_at "
+        "FROM settlement WHERE model_name = ? AND fixture_id = ?",
+        (model_name, fixture_id),
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["result"] = BetResult(d["result"])
+    return Settlement(**d)
+
+
+def record_settlement(
+    conn: sqlite3.Connection,
+    settlement: Settlement,
+    competitor: Competitor,
+    ledger: list[BankrollEntry],
+) -> None:
+    """Atomically write a settlement: the settlement row, the updated competitor
+    standing, and any bankroll-ledger entries — in ONE transaction (single commit)
+    so a crash can never leave a payout half-applied."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO settlement "
+        "(model_name, fixture_id, result, payout, pnl, settled_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            settlement.model_name,
+            settlement.fixture_id,
+            settlement.result.value,
+            settlement.payout,
+            settlement.pnl,
+            settlement.settled_at.isoformat(),
+        ),
+    )
+    cur.execute(
+        "UPDATE competitor SET bankroll = ?, lives_used = ?, active = ? "
+        "WHERE model_name = ?",
+        (
+            competitor.bankroll,
+            competitor.lives_used,
+            int(competitor.active),
+            competitor.model_name,
+        ),
+    )
+    for e in ledger:
+        cur.execute(
+            "INSERT INTO bankroll_history "
+            "(model_name, at, delta, balance_after, reason, fixture_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                e.model_name,
+                e.at.isoformat(),
+                e.delta,
+                e.balance_after,
+                e.reason,
+                e.fixture_id,
+            ),
+        )
+    conn.commit()
+
+
+def list_bankroll_history(
+    conn: sqlite3.Connection, model_name: str
+) -> list[BankrollEntry]:
+    """Return a competitor's bankroll ledger in chronological order."""
+    rows = conn.execute(
+        "SELECT model_name, at, delta, balance_after, reason, fixture_id "
+        "FROM bankroll_history WHERE model_name = ? ORDER BY id",
+        (model_name,),
+    ).fetchall()
+    return [BankrollEntry(**dict(r)) for r in rows]
 
 
 # ---- Intelligence layer (dossiers / reports / briefings) -----------------

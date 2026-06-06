@@ -54,3 +54,15 @@ Failure modes discovered, the signal that caught them, and the prevention rule.
 - **Prevention rule (echoes L1):** the `web` plugin is a paid feature; before building on it, probe
   `GET /api/v1/key` for `is_free_tier`/`limit`. Here the key was funded (`is_free_tier:false`), so it
   works. On a $0 free-tier key it would silently degrade — check the capability on the real key first.
+
+## L6 — Compute the test fixture from the rule it exercises, not a round number (2026-06-06)
+- **Failure mode:** the settlement regression set the bust-case bankroll to $15k expecting a capped
+  loss to cross the $10k floor — but the 25% cap means the max loss is $3.75k, so $15k→$11.25k never
+  busted and the re-buy assertion failed. The starting figure was picked for being "near the floor"
+  rather than derived from the cap × floor interaction.
+- **Detection signal:** `AssertionError ... bankroll=11250.0 lives_used=0` on first run — the test
+  caught its own bad setup, not a code bug.
+- **Prevention rule:** when a test must trigger a threshold crossing, derive the input from the
+  mechanic (here: need `bankroll*(1-0.25) <= floor` ⇒ `bankroll <= 13_333`), don't eyeball a
+  "looks close enough" constant. A test whose fixture isn't computed from the rule can pass or fail
+  for the wrong reason.
