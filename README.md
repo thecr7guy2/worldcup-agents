@@ -17,6 +17,12 @@ cp .env.example .env    # then fill in your API keys
 Required keys (see `.env.example`): `API_FOOTBALL_KEY`, `ODDS_API_KEY`, and
 `OPENROUTER_API_KEY` (all 5 models route through OpenRouter).
 
+## Run the tournament (server)
+
+The live competition runs on an always-on Linux box via two systemd timers (an
+`orchestrate tick` and an `ingest odds` poll). See [`deploy/`](deploy/README.md) for the
+clone → `uv sync` → `.env` → seed → install-timers runbook.
+
 ## Stack
 
 Python 3.11 · Pydantic AI · OpenRouter (all models, one key) · SQLite · data from
