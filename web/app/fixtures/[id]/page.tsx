@@ -204,6 +204,13 @@ function BoardCard({ entry, home, away }: { entry: BoardEntry; home: TeamSide; a
               <span className="mono ml-2 text-muted">{p.pred_home_goals}-{p.pred_away_goals}</span>
             )}
           </Row>
+          {p.p_home != null && p.p_draw != null && p.p_away != null && (
+            <Row label="Win prob">
+              <span className="mono text-[11px] text-muted">
+                {home.code ?? "H"} {pct(p.p_home, 0)} · D {pct(p.p_draw, 0)} · {away.code ?? "A"} {pct(p.p_away, 0)}
+              </span>
+            </Row>
+          )}
           {b && b.pick && b.stake > 0 ? (
             <Row label="Bets">
               <span className="font-medium text-ink uppercase">{b.pick}</span>

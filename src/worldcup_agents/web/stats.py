@@ -133,7 +133,8 @@ def fixture_detail(conn: sqlite3.Connection, fixture_id: int) -> dict | None:
     preds = {
         r["model_name"]: dict(r)
         for r in conn.execute(
-            "SELECT model_name, winner, pred_home_goals, pred_away_goals, "
+            "SELECT model_name, winner, p_home, p_draw, p_away, "
+            "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
             "predicted_advance, confidence, reasoning FROM prediction WHERE fixture_id = ?",
             (fixture_id,),
         )

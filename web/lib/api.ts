@@ -178,8 +178,13 @@ export interface BoardEntry {
   meta: AgentMeta;
   prediction: {
     winner: string;
+    p_home: number | null;
+    p_draw: number | null;
+    p_away: number | null;
     pred_home_goals: number | null;
     pred_away_goals: number | null;
+    exp_home_goals: number | null;
+    exp_away_goals: number | null;
     predicted_advance: string | null;
     confidence: number;
     reasoning: string;
