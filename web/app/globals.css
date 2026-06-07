@@ -1,0 +1,238 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   THE ARENA
+   A World Cup match programme collided with a live trading desk.
+   Warm paper, tournament red, ink, sharp edges, loud editorial type.
+========================================================================== */
+@theme {
+  --color-bg: #ece6d6;
+  --color-surface: #f7f2e5;
+  --color-surface-2: #e2dac7;
+  --color-elevated: #cbc1a9;
+  --color-line: rgba(22, 29, 24, 0.16);
+  --color-line-strong: rgba(22, 29, 24, 0.38);
+
+  --color-ink: #161d18;
+  --color-muted: #596157;
+  --color-faint: #8d8d7d;
+
+  --color-volt: #ef492f;
+  --color-volt-dim: rgba(239, 73, 47, 0.12);
+  --color-up: #087a52;
+  --color-down: #c83427;
+  --color-down-dim: rgba(200, 52, 39, 0.11);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
+  --font-display: var(--font-bricolage), var(--font-geist-sans), sans-serif;
+
+  --radius-card: 4px;
+  --radius-chip: 2px;
+  --radius-input: 2px;
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100dvh;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(circle at 80% 4%, rgba(239, 73, 47, 0.09), transparent 22rem),
+    linear-gradient(rgba(22, 29, 24, 0.025) 1px, transparent 1px),
+    var(--color-bg);
+  background-size: auto, 100% 28px, auto;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.02em;
+}
+
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  opacity: 0.045;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+}
+
+.pitch-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.hero-stage {
+  position: relative;
+  isolation: isolate;
+  color: #f8f3e7;
+  background:
+    radial-gradient(circle at 82% 45%, transparent 0 132px, rgba(255,255,255,.18) 133px 135px, transparent 136px),
+    linear-gradient(90deg, transparent 49.8%, rgba(255,255,255,.13) 50%, transparent 50.2%),
+    #e84931;
+}
+
+.hero-stage::before {
+  content: "JUDGMENT UNDER PRESSURE / JUDGMENT UNDER PRESSURE /";
+  position: absolute;
+  inset: auto -5% 3% auto;
+  z-index: -1;
+  width: 72%;
+  color: rgba(22, 29, 24, 0.11);
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5.8vw, 6.5rem);
+  font-weight: 800;
+  line-height: .78;
+  letter-spacing: -.06em;
+  text-align: right;
+  transform: rotate(-8deg);
+}
+
+.cut-panel {
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+}
+
+.ticket {
+  position: relative;
+  background: var(--color-surface);
+  box-shadow: 12px 12px 0 rgba(22, 29, 24, 0.16);
+}
+
+.ticket::before,
+.ticket::after {
+  content: "";
+  position: absolute;
+  top: 52%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e84931;
+  transform: translateY(-50%);
+}
+
+.ticket::before { left: -9px; }
+.ticket::after { right: -9px; }
+
+.ink-field {
+  position: relative;
+  color: #f7f2e5;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0 155px, rgba(247,242,229,.08) 156px 158px, transparent 159px),
+    linear-gradient(90deg, transparent 49.9%, rgba(247,242,229,.08) 50%, transparent 50.1%),
+    #14251d;
+}
+
+.ink-field::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  border: 1px solid rgba(247, 242, 229, .1);
+}
+
+.registration {
+  position: relative;
+}
+
+.registration::before,
+.registration::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+
+.registration::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+}
+
+.registration::after {
+  right: -1px;
+  bottom: -1px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+}
+
+.agent-number {
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(22, 29, 24, 0.2);
+}
+
+.text-up { color: var(--color-up); }
+.text-down { color: var(--color-down); }
+
+:where(a, button, [tabindex]):focus-visible {
+  outline: 3px solid var(--color-volt);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: #f7f2e5;
+  background: var(--color-volt);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
+::-webkit-scrollbar-thumb {
+  background: var(--color-muted);
+  border: 3px solid var(--color-bg);
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.ticker-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: ticker 40s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ticker-track { animation: none; }
+}
