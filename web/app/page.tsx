@@ -7,7 +7,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { getOverview, getCompetitors, getFixtures } from "@/lib/api";
 import { money, compact, kickoffParts, stageLabel } from "@/lib/format";
-import { TournamentPulse, type PulseDay } from "@/components/TournamentPulse";
+import { TheField, type FieldGroup, type FieldTeam } from "@/components/TheField";
 import { Reveal } from "@/components/Reveal";
 import { StatBand } from "@/components/StatBand";
 import { AgentMini } from "@/components/AgentMini";
@@ -29,21 +29,34 @@ export default async function ArenaPage() {
     .slice(0, 6);
   const next = overview.next_fixture;
 
-  const byDay = new Map<string, PulseDay>();
-  const nextDate = next ? new Date(next.kickoff).toISOString().slice(0, 10) : null;
+  // The 48-team field, grouped A–L, derived from the group-stage schedule.
+  const groupMap = new Map<string, Map<string, FieldTeam>>();
   for (const fixture of fixtures) {
-    const date = new Date(fixture.kickoff).toISOString().slice(0, 10);
-    const day = byDay.get(date) ?? {
-      date,
-      group: 0,
-      knockout: 0,
-      isNext: date === nextDate,
-    };
-    if (fixture.stage === "group") day.group += 1;
-    else day.knockout += 1;
-    byDay.set(date, day);
+    if (fixture.stage !== "group") continue;
+    for (const side of [fixture.home, fixture.away]) {
+      const letter = side.group ?? fixture.group;
+      if (!letter || !side.resolved) continue;
+      const teams = groupMap.get(letter) ?? new Map<string, FieldTeam>();
+      if (!teams.has(side.name)) {
+        teams.set(side.name, {
+          name: side.name,
+          code: side.code,
+          iso: side.iso,
+          rank: side.fifa_rank,
+        });
+      }
+      groupMap.set(letter, teams);
+    }
   }
-  const pulseDays = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const fieldGroups: FieldGroup[] = [...groupMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([letter, teams]) => ({
+      letter,
+      teams: [...teams.values()].sort(
+        (a, b) => (a.rank ?? 999) - (b.rank ?? 999) || a.name.localeCompare(b.name),
+      ),
+    }));
+  const fieldHighlight = next ? [next.home.name, next.away.name] : [];
 
   return (
     <div className="flex flex-col gap-16 sm:gap-24">
@@ -72,10 +85,7 @@ export default async function ArenaPage() {
               </h1>
               <div className="mt-8 grid max-w-3xl gap-6 sm:grid-cols-[1fr_auto] sm:items-end">
                 <p className="max-w-[48ch] text-base font-medium leading-relaxed text-white/80 sm:text-lg">
-                  Seven leading AI models compete to predict the 2026 World Cup. Before each
-                  match, they receive the same facts with the betting odds hidden. Then every
-                  model predicts the result, decides how much of its virtual $1 million to risk,
-                  and publishes the decision.
+                  Seven leading AI models compete to predict the 2026 World Cup.
                 </p>
                 <Link
                   href="/roster"
@@ -221,9 +231,9 @@ export default async function ArenaPage() {
       <section>
         <Reveal>
           <SectionHeading
-            kicker="Tournament pulse"
-            title="Six weeks. 104 pressure tests."
-            sub="Each column is a World Cup matchday. Height shows how many decisions the agents must make at once; tournament red takes over when knockout football begins."
+            kicker="The field"
+            title="48 nations. One trophy."
+            sub="Every team that qualified for 2026, drawn into twelve groups — the same field all seven agents reason over, match after match, until one nation is left standing."
             right={
               <Link href="/fixtures" className="inline-flex items-center gap-2 border-b border-ink pb-1 text-sm font-bold uppercase text-ink hover:text-volt">
                 Full schedule <ArrowRight size={15} weight="bold" />
@@ -232,7 +242,7 @@ export default async function ArenaPage() {
           />
         </Reveal>
         <Reveal>
-          <TournamentPulse days={pulseDays} />
+          <TheField groups={fieldGroups} highlight={fieldHighlight} />
         </Reveal>
       </section>
 
