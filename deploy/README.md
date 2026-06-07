@@ -41,6 +41,22 @@ uv run python -m worldcup_agents.bracket status       # standings + unresolved K
 Before June 11 every window is in the future, so `status` should show little or nothing due
 and **no errors**. A keys/cwd problem surfaces here, not at 3 a.m. on matchday.
 
+### 2b. End-to-end dry run (prove the LLM path — do this once before June 11)
+
+`status` is free but only checks scheduling. The expensive briefing → predict → bet path
+never actually fires until the first real fixture enters its window — i.e. live, on
+matchday. Force it now, in isolation, so a malformed-output / token / slug problem has runway:
+
+```bash
+uv run python scripts/dry_run.py --models 1   # cheap: briefing + 1 model (a few cents)
+uv run python scripts/dry_run.py              # full: briefing + all competitors
+```
+
+It builds a **throwaway** DB (never touches `worldcup.db`), seeds one synthetic fixture, and
+prints the briefing, every model's prediction + bet + reasoning, per-model failures, and the
+cost/token telemetry. It **spends real OpenRouter credit** (web search + reasoning). A green
+run means every competitor produced a valid prediction + bet against the live models.
+
 ## 3. Install + enable the timers
 
 ```bash
