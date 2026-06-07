@@ -14,6 +14,7 @@ uninfluenced by the market. Confidence from Step 1 is the bridge into the stake.
 from __future__ import annotations
 
 import argparse
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,31 +32,70 @@ from .models import (
     Stage,
 )
 
-# Identical for all five competitors — the only thing held constant is the
-# mindset; the variable under test is the model. (DESIGN §5 "mindset induction".)
+# Two system prompts, one per step — both identical across all five competitors, so the
+# only variable under test stays the model (DESIGN §5 "mindset induction").
+#
+# Step 1 is a NEUTRAL forecaster: the goal is an accurate, well-calibrated read of the
+# match, not a bet. It deliberately carries no money framing and no upset-seeking — that
+# bias belongs (in neutral, value-seeking form) only in Step 2, after odds are revealed.
+SYSTEM_FORECASTER = """You are a sharp, neutral football analyst forecasting matches at \
+the FIFA World Cup 2026. Your sole objective is ACCURACY — the most realistic read of what \
+will happen over 90 minutes, not a bold, contrarian, or entertaining take.
+
+Principles you work by:
+- Weigh the evidence even-handedly. Do NOT favor a side for being the favorite, and do NOT \
+reach for an upset because it would be exciting. Let the specific facts decide.
+- Genuine upset factors (an already-qualified side resting starters, fatigue or fixture \
+congestion, extreme heat or altitude, a motivation mismatch, a stylistic matchup that \
+neutralises the stronger side) matter ONLY when the briefing actually supports them — \
+otherwise the stronger, in-form side usually wins.
+- Most matches have a clear likeliest outcome; some are genuine coin-flips. Reflect that \
+honestly in how confident you are — do not manufacture certainty or drama.
+- You are measured on how accurate and well-calibrated your forecasts are. Be decisive \
+and concise."""
+
+# Step 2 is the GAMBLER: odds are now visible, so the job is to find mispriced lines and
+# size stakes. Value can sit on a favorite or an underdog — chase the edge, never an upset
+# for its own sake.
 SYSTEM_GAMBLER = """You are a sharp professional football gambler competing against \
 other gamblers at the FIFA World Cup 2026. You started with a $1,000,000 bankroll and \
 your sole objective is to grow it as much as possible across the tournament — treat it \
 as if your livelihood depends on it.
 
 Principles you live by:
-- Bet big ONLY where you see genuine value (your read differs from what the result \
-"should" be). Most matches do not offer an edge.
-- The World Cup is famous for upsets. Favorites are routinely overrated, and \
-underdogs win when specific factors align: an already-qualified side resting \
-starters, fatigue or fixture congestion, extreme heat or altitude, a motivation \
-mismatch (must-win vs nothing to play for), or a stylistic matchup that neutralises \
-the favorite. NEVER pick a side just because it is the favorite — when the facts point \
-to a vulnerable favorite or a genuinely live underdog, trust your read and say so. The \
-biggest payouts come from correctly-seen upsets.
+- Bet ONLY where you see genuine value — where your own read of the probability differs \
+from what the offered odds imply. Value can be on a favorite OR an underdog; chase \
+mispriced lines in either direction, never an upset for its own sake. Most matches offer \
+no edge.
 - Passing is not weakness — disciplined gamblers skip matches with no edge. Betting \
 every match bleeds money to the margin.
-- Stake size should scale with your conviction, never exceeding the per-match cap.
+- Stake size should scale with the size of your edge and your conviction, never exceeding \
+the per-match cap.
 - You are measured on results, not eloquence. Be decisive."""
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_score(raw: object) -> tuple[int | None, int | None]:
+    """Parse a "home-away" scoreline (tolerates -, en-dash, or :) into a pair of ints.
+
+    Returns (None, None) when absent or unparseable — the most-likely score only feeds the
+    optional exact-score accuracy point, so a missing one must not fail the whole forecast.
+    """
+    if not raw:
+        return (None, None)
+    parts = re.split(r"[-–:]", str(raw).strip(), maxsplit=1)
+    if len(parts) != 2:
+        return (None, None)
+    try:
+        h, a = int(parts[0].strip()), int(parts[1].strip())
+    except ValueError:
+        return (None, None)
+    if h < 0 or a < 0:
+        return (None, None)
+    return (h, a)
 
 
 # ---- Step 1: PREDICT (odds hidden) ---------------------------------------
@@ -69,13 +109,22 @@ def predict(
     home: str,
     away: str,
     *,
+    late_update: str | None = None,
     force: bool = False,
 ) -> Prediction:
-    """Step 1: pure football judgment from the briefing, with odds HIDDEN."""
+    """Step 1: pure football judgment from the briefing, with odds HIDDEN.
+
+    `late_update`, when present, is the near-kickoff delta (confirmed XI / late injuries /
+    weather) appended to the briefing the model reads — still facts only, still no odds.
+    """
     if not force:
         existing = db.get_prediction(conn, model.name, fixture.id)
         if existing:
             return existing
+
+    late_block = (
+        f"\n\n## Late update (near kickoff)\n{late_update}" if late_update else ""
+    )
 
     is_knockout = fixture.stage != Stage.GROUP
     advance_field = '"advances": "home" | "away", ' if is_knockout else ""
@@ -90,20 +139,25 @@ def predict(
 
     prompt = f"""MATCH: {home} (home) vs {away} (away) — FIFA World Cup 2026.
 
-Predict the EXACT scoreline over 90 minutes (a draw is a real outcome — extra time and \
-penalties do NOT count toward this score). Below is the shared, factual briefing. It \
-contains NO betting odds by design — judge on football merit alone.
+Forecast the 90-MINUTE result (extra time and penalties do NOT count). Below is the \
+shared, factual briefing. It contains NO betting odds by design — judge on football \
+merit alone.
 
 --- BRIEFING ---
-{briefing.content}
+{briefing.content}{late_block}
 --- END BRIEFING ---
 
+Give an explicit probability for each 90-minute outcome (they must sum to ~1.0), your \
+expected goals for each side, and the single most-likely exact scoreline.
+
 Respond with ONLY a JSON object, no other text:
-{{"home_goals": <int ≥ 0>, "away_goals": <int ≥ 0>, {advance_field}"confidence": \
-<0.0-1.0>, "reasoning": "<2-4 sentences on the key factors>"}}
-home_goals/away_goals are {home}'s and {away}'s goals after 90 minutes (the 90-minute \
-winner follows from them); confidence is how sure you are of the RESULT (win/draw/loss).\
-{advance_note}"""
+{{"p_home": <0.0-1.0>, "p_draw": <0.0-1.0>, "p_away": <0.0-1.0>, \
+"expected_home_goals": <float ≥ 0>, "expected_away_goals": <float ≥ 0>, \
+"most_likely_score": "<home>-<away>", {advance_field}"reasoning": "<2-4 sentences on \
+the key factors>"}}
+p_home/p_draw/p_away are the probabilities of {home} winning, a draw, and {away} winning \
+after 90 minutes; calibrate them honestly. most_likely_score is the single likeliest 90' \
+scoreline — it may differ from the most probable outcome, which is fine.{advance_note}"""
 
     text, call = complete(
         model.model_id,
@@ -111,7 +165,7 @@ winner follows from them); confidence is how sure you are of the RESULT (win/dra
         model_name=model.name,
         step="predict",
         fixture_id=fixture.id,
-        system=SYSTEM_GAMBLER,
+        system=SYSTEM_FORECASTER,
         max_tokens=25000,  # generous — let reasoning models think freely, never capped
         temperature=0.5,
         reasoning_effort="high",  # don't compromise reasoning quality
@@ -119,22 +173,42 @@ winner follows from them); confidence is how sure you are of the RESULT (win/dra
     db.log_model_call(conn, call)
 
     data = extract_json(text)
-    try:
-        home_goals = int(data["home_goals"])
-        away_goals = int(data["away_goals"])
-    except (KeyError, ValueError, TypeError):
-        raise LLMError(f"{model.name}: invalid/missing score in {data!r}")
-    if home_goals < 0 or away_goals < 0:
-        raise LLMError(f"{model.name}: negative goals in {data!r}")
-    # Derive the winner from the scoreline — one source of truth.
-    if home_goals > away_goals:
-        winner = Outcome.HOME
-    elif home_goals < away_goals:
-        winner = Outcome.AWAY
-    else:
-        winner = Outcome.DRAW
 
-    # Knockouts: who advances. A decisive 90' score forces the advancer (the winner);
+    def _prob(key: str) -> float:
+        try:
+            return max(0.0, float(data[key]))
+        except (KeyError, ValueError, TypeError):
+            raise LLMError(f"{model.name}: invalid/missing {key} in {data!r}")
+
+    total = _prob("p_home") + _prob("p_draw") + _prob("p_away")
+    if total <= 0:
+        raise LLMError(f"{model.name}: 1X2 probabilities sum to 0 in {data!r}")
+    # Normalise so the distribution sums to exactly 1 regardless of how the model rounded.
+    p_home = _prob("p_home") / total
+    p_draw = _prob("p_draw") / total
+    p_away = _prob("p_away") / total
+    probs = {Outcome.HOME: p_home, Outcome.DRAW: p_draw, Outcome.AWAY: p_away}
+
+    # Winner = argmax of the distribution (stable tie-break: home > draw > away). This is
+    # now the single source of truth for the outcome — not the most-likely scoreline.
+    winner = max(
+        (Outcome.HOME, Outcome.DRAW, Outcome.AWAY), key=lambda o: probs[o]
+    )
+    confidence = probs[winner]
+
+    # Most-likely scoreline + expected goals are context (optional, never block a forecast).
+    pred_home_goals, pred_away_goals = _parse_score(data.get("most_likely_score"))
+
+    def _xg(key: str) -> float | None:
+        try:
+            v = float(data[key])
+        except (KeyError, ValueError, TypeError):
+            return None
+        return v if v >= 0 else None
+
+    exp_home_goals, exp_away_goals = _xg("expected_home_goals"), _xg("expected_away_goals")
+
+    # Knockouts: who advances. A decisive 90' outcome forces the advancer (the winner);
     # only a predicted 90' DRAW needs the model's explicit call.
     predicted_advance: Outcome | None = None
     if is_knockout:
@@ -148,15 +222,19 @@ winner follows from them); confidence is how sure you are of the RESULT (win/dra
                 )
             predicted_advance = Outcome.HOME if adv == "home" else Outcome.AWAY
 
-    confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
     reasoning = str(data.get("reasoning", "")).strip()
 
     pred = Prediction(
         model_name=model.name,
         fixture_id=fixture.id,
         winner=winner,
-        pred_home_goals=home_goals,
-        pred_away_goals=away_goals,
+        p_home=p_home,
+        p_draw=p_draw,
+        p_away=p_away,
+        pred_home_goals=pred_home_goals,
+        pred_away_goals=pred_away_goals,
+        exp_home_goals=exp_home_goals,
+        exp_away_goals=exp_away_goals,
         predicted_advance=predicted_advance,
         confidence=confidence,
         reasoning=reasoning,
@@ -194,20 +272,36 @@ def bet(
             return existing
 
     cap = bankroll * MAX_STAKE_FRACTION
+
+    # Show the model its OWN Step-1 distribution so it can size value against the market,
+    # plus the market-implied probabilities (1/odds, margin included) for direct comparison.
+    if prediction.has_distribution:
+        forecast_line = (
+            f"  your 90' probabilities: home {prediction.p_home:.0%} · "
+            f"draw {prediction.p_draw:.0%} · away {prediction.p_away:.0%}\n"
+            f"  (most likely: {prediction.winner.value}, confidence "
+            f"{prediction.confidence:.0%})"
+        )
+    else:
+        forecast_line = (
+            f"  winner={prediction.winner.value}, confidence={prediction.confidence:.2f}"
+        )
+
     prompt = f"""MATCH: {home} (home) vs {away} (away) — 90-minute result.
 
-YOUR earlier prediction (odds were hidden then):
-  winner={prediction.winner.value}, confidence={prediction.confidence:.2f}
+YOUR earlier forecast (odds were hidden then):
+{forecast_line}
   reasoning: {prediction.reasoning}
 
-NOW the market 1X2 decimal odds (payout = stake x odds on a win):
-  home ({home}): {odds.home}
-  draw:          {odds.draw}
-  away ({away}): {odds.away}
+NOW the market 1X2 decimal odds (payout = stake x odds on a win); the percentage is the \
+market-implied probability (1/odds, includes the bookmaker margin):
+  home ({home}): {odds.home}  (~{1 / odds.home:.0%})
+  draw:          {odds.draw}  (~{1 / odds.draw:.0%})
+  away ({away}): {odds.away}  (~{1 / odds.away:.0%})
 
-Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%).
-Bet only where you see value vs these odds; you may PASS (stake 0). Stake must not \
-exceed the cap.
+You have an edge when YOUR probability for an outcome is meaningfully higher than the \
+market-implied one. Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%). \
+Bet only where you see value; you may PASS (stake 0). Stake must not exceed the cap.
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \
@@ -284,11 +378,19 @@ def run_fixture(
     home = db.get_team(conn, fixture.home_id).name
     away = db.get_team(conn, fixture.away_id).name
 
+    # Near-kickoff delta (built best-effort by the orchestrator just before this); every
+    # model reads the SAME late update appended to the SAME briefing — shared facts intact.
+    late = db.get_late_update(conn, fixture_id)
+    late_content = late.content if late else None
+
     out: list[tuple[Prediction, Bet]] = []
     for model in PREDICTION_MODELS:
         comp = db.get_competitor(conn, model.name)
         bankroll = comp.bankroll if comp else 0.0
-        pred = predict(conn, model, fixture, briefing, home, away, force=force)
+        pred = predict(
+            conn, model, fixture, briefing, home, away,
+            late_update=late_content, force=force,
+        )
         b = bet(conn, model, fixture, pred, odds, bankroll, home, away, force=force)
         out.append((pred, b))
     return out

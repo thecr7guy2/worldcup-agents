@@ -28,10 +28,16 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import db
-from .config import INTELLIGENCE_MODEL, ModelSpec
+from .config import (
+    INTEL_MAX_TOKENS,
+    INTEL_WEB_MAX_RESULTS,
+    INTELLIGENCE_MODEL,
+    ModelSpec,
+)
 from .llm import LLMError, complete
 from .models import (
     Fixture,
+    LateUpdate,
     MatchBriefing,
     PostMatchReport,
     PreMatchReport,
@@ -167,9 +173,10 @@ Facts only. No odds. No prediction about the World Cup."""
         model_name=model.name,
         step="dossier",
         system=SYSTEM,
-        max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
         temperature=0.3,
         web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
     )
     db.log_model_call(conn, call)
 
@@ -199,6 +206,7 @@ def build_pre_match_report(
     conn: sqlite3.Connection,
     fixture: Fixture,
     team: Team,
+    opponent: Team,
     *,
     cutoff: datetime,
     model: ModelSpec = INTELLIGENCE_MODEL,
@@ -207,6 +215,8 @@ def build_pre_match_report(
     """Build (or reuse) a frozen pre-match report for one team in one fixture.
 
     Layers fresh, cutoff-bounded news on top of the team's dossier. NO odds.
+    The opponent is named so the tactical/matchup section is grounded in who they face;
+    the report stays per-(team, fixture), so this does not pollute the team's dossier.
     """
     if not force:
         existing = db.get_pre_match_report(conn, fixture.id, team.id)
@@ -216,8 +226,8 @@ def build_pre_match_report(
     dossier = build_dossier(conn, team, model=model, force=force)
     today = cutoff.date().isoformat()
 
-    prompt = f"""You are preparing a pre-match report on {team.name} for their FIFA \
-World Cup 2026 fixture kicking off {fixture.kickoff.isoformat()}.
+    prompt = f"""You are preparing a pre-match report on {team.name} ahead of their FIFA \
+World Cup 2026 fixture against {opponent.name}, kicking off {fixture.kickoff.isoformat()}.
 
 TEMPORAL RULE: today is {today}. Use ONLY information publicly known as of today. \
 Say NOTHING about the match itself (it has not been played).
@@ -233,10 +243,13 @@ Write a neutral, factual report. Format it as markdown using EXACTLY these secti
 headers, bold, in this order, each followed by `-` bullet points:
 
 **Availability** — injuries, suspensions, yellow-card risk, probable XI, rotation. \
-This is the highest-value signal; put it first.
+This is the highest-value signal; put it first. Prefer claims confirmed by an official \
+source or corroborated across multiple reports; explicitly mark anything unconfirmed or \
+rumored as such rather than stating it as fact.
 **Form & trend** — recent results with scores/dates, the trend.
 **Stakes & motivation** — must-win vs already-qualified, rest-vs-rotate.
-**Tactics & matchup** — formation, style, manager, stylistic matchup.
+**Tactics & matchup** — formation, style, manager, and how {team.name} matches up \
+stylistically against {opponent.name} specifically.
 **Rest & conditions** — rest days, travel, fixture congestion, and 2026 conditions \
 (US heat, Mexico City altitude, weather).
 **Psychology & crowd** — temperament, pressure, host/diaspora crowd factors.
@@ -255,9 +268,10 @@ Facts only. No odds. No prediction of the result."""
         step="pre_match",
         fixture_id=fixture.id,
         system=SYSTEM,
-        max_tokens=4000,  # headroom for reasoning models (tokens spent thinking)
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
         temperature=0.3,
         web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
     )
     db.log_model_call(conn, call)
 
@@ -317,9 +331,10 @@ Facts only. No odds. No prediction."""
         step="match_context",
         fixture_id=fixture.id,
         system=SYSTEM,
-        max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
         temperature=0.3,
         web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
     )
     db.log_model_call(conn, call)
     content = _strip_preamble(text)
@@ -368,10 +383,10 @@ def assemble_briefing(
         raise ValueError(f"fixture {fixture.id}: missing team rows")
 
     report_home = build_pre_match_report(
-        conn, fixture, home, cutoff=cutoff, model=model, force=force
+        conn, fixture, home, away, cutoff=cutoff, model=model, force=force
     )
     report_away = build_pre_match_report(
-        conn, fixture, away, cutoff=cutoff, model=model, force=force
+        conn, fixture, away, home, cutoff=cutoff, model=model, force=force
     )
     context = build_match_context(conn, fixture, home, away, cutoff=cutoff, model=model)
 
@@ -406,6 +421,80 @@ def brief_fixture(
     if fixture is None:
         raise ValueError(f"no fixture with id {fixture_id}")
     return assemble_briefing(conn, fixture, model=model, force=force)
+
+
+# ---- Late update (per fixture, fetched just before predictions lock) ------
+
+
+def build_late_update(
+    conn: sqlite3.Connection,
+    fixture: Fixture,
+    *,
+    cutoff: datetime,
+    model: ModelSpec = INTELLIGENCE_MODEL,
+    force: bool = False,
+) -> LateUpdate:
+    """Fetch a short late delta for a fixture: confirmed XI, late injuries/suspensions,
+    and matchday weather — the things that move between the T-24h briefing and kickoff.
+
+    Appended to the briefing at predict time (the briefing artifact stays immutable).
+    Temporal integrity: `cutoff` must be before kickoff; NO odds, NO prediction.
+    """
+    if not force:
+        existing = db.get_late_update(conn, fixture.id)
+        if existing:
+            return existing
+
+    if fixture.kickoff <= cutoff:
+        raise ValueError(
+            f"fixture {fixture.id} kicked off at {fixture.kickoff.isoformat()} "
+            f"(<= cutoff {cutoff.isoformat()}); a late update would violate temporal integrity"
+        )
+
+    home = db.get_team(conn, fixture.home_id)
+    away = db.get_team(conn, fixture.away_id)
+    if home is None or away is None:
+        raise ValueError(f"fixture {fixture.id}: missing team rows")
+
+    when = cutoff.isoformat()
+    prompt = f"""Find the LATEST team news for the FIFA World Cup 2026 fixture {home.name} \
+vs {away.name}, kicking off {fixture.kickoff.isoformat()}.
+
+TEMPORAL RULE: right now it is {when}. Use ONLY information published before now, and say \
+NOTHING about the match result (it has not been played). This is a short delta on top of an \
+earlier report — include only what is fresh and match-relevant near kickoff.
+
+Format as markdown using EXACTLY these bold headers, in this order, each followed by `-` \
+bullets; OMIT a header entirely if you have no verified facts for it:
+
+**Confirmed/expected lineups** — starting XI or late line-up news for either side, noting \
+how firm it is (official vs expected).
+**Late injuries & suspensions** — any fresh availability change since the buildup.
+**Matchday conditions** — kickoff-time weather (heat/rain/wind), pitch, late venue notes.
+
+Keep it UNDER ~150 words. Facts only. No odds. No prediction."""
+
+    text, call = complete(
+        model.model_id,
+        prompt,
+        model_name=model.name,
+        step="late_update",
+        fixture_id=fixture.id,
+        system=SYSTEM,
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
+        temperature=0.3,
+        web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
+    )
+    db.log_model_call(conn, call)
+
+    content = _strip_preamble(text)
+    if not content:
+        raise LLMError(f"late update for fixture {fixture.id} came back empty")
+
+    update = LateUpdate(fixture_id=fixture.id, cutoff_at=cutoff, content=content)
+    db.upsert_late_update(conn, update)
+    return update
 
 
 # ---- Post-match (read a finished match ONCE -> recap -> update the dossier) ----
@@ -456,9 +545,10 @@ facts for it. Keep it UNDER ~250 words. Facts only. No odds. No prediction."""
         step="post_match",
         fixture_id=fixture_id,
         system=SYSTEM,
-        max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
         temperature=0.3,
         web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
     )
     db.log_model_call(conn, call)
     content = _strip_preamble(text)
@@ -476,6 +566,97 @@ facts for it. Keep it UNDER ~250 words. Facts only. No odds. No prediction."""
             ),
         )
     return content
+
+
+def build_match_recap(
+    conn: sqlite3.Connection,
+    fixture: Fixture,
+    *,
+    model: ModelSpec = INTELLIGENCE_MODEL,
+    force: bool = False,
+) -> dict[int, str]:
+    """Recap a finished fixture in ONE web search, producing a per-team recap for BOTH
+    sides at once (dedupes the old one-search-per-team pattern). Persists each as a
+    PostMatchReport and returns ``{team_id: recap}``. Post-match info legitimately
+    post-dates the match — temporal integrity only forbids leaking it into that same
+    match's pre-match briefing.
+    """
+    home = db.get_team(conn, fixture.home_id)
+    away = db.get_team(conn, fixture.away_id)
+    if home is None or away is None:
+        raise ValueError(f"fixture {fixture.id}: both sides must be resolved to recap")
+
+    if not force:
+        h = db.get_post_match_report(conn, fixture.id, home.id)
+        a = db.get_post_match_report(conn, fixture.id, away.id)
+        if h and a:
+            return {home.id: h.content, away.id: a.content}
+
+    hg, ag = fixture.home_goals_90, fixture.away_goals_90
+    extra = (
+        " (won on penalties)"
+        if fixture.went_penalties
+        else " (after extra time)" if fixture.went_extra_time else ""
+    )
+    played_on = fixture.kickoff.date().isoformat()
+    score = f"{home.name} {hg}-{ag} {away.name} at 90 minutes{extra}"
+
+    prompt = f"""Write a neutral, factual POST-MATCH recap of this FIFA World Cup 2026 \
+match, played {played_on}: {score} ({fixture.stage.value}). Search the web for what \
+happened, then cover BOTH teams.
+
+Output EXACTLY this structure, including the two marker lines verbatim:
+
+[[HOME]] {home.name}
+**What happened** — the result and scoreline, and how the match unfolded for {home.name}.
+**Standout performers** — {home.name} players who stood out (goals, assists, errors), neutrally.
+**Fitness & momentum** — injuries/knocks for {home.name}, and what the result signals for their form.
+
+[[AWAY]] {away.name}
+**What happened** — the same match from {away.name}'s perspective.
+**Standout performers** — {away.name} players who stood out, neutrally.
+**Fitness & momentum** — injuries/knocks for {away.name}, and what the result signals for their form.
+
+Use these exact headers; omit a header only if you have no verified facts for it. Keep \
+EACH team's block UNDER ~200 words. Facts only. No odds. No prediction."""
+
+    text, call = complete(
+        model.model_id,
+        prompt,
+        model_name=model.name,
+        step="post_match",
+        fixture_id=fixture.id,
+        system=SYSTEM,
+        max_tokens=INTEL_MAX_TOKENS,  # two team blocks; reasoning must not starve them
+        temperature=0.3,
+        web_search=True,
+        web_max_results=INTEL_WEB_MAX_RESULTS,
+    )
+    db.log_model_call(conn, call)
+    content = _strip_preamble(text)
+    if not content:
+        raise LLMError(f"match recap for fixture {fixture.id} came back empty")
+
+    # Split into per-team recaps on the AWAY marker; if the model dropped the markers,
+    # fall back to the whole recap for both (the dossier-update step extracts per team).
+    home_recap, away_recap = content, content
+    if "[[AWAY]]" in content:
+        before, after = content.split("[[AWAY]]", 1)
+        home_recap = before.replace("[[HOME]]", "").strip() or content
+        away_recap = after.strip() or content
+
+    now = _now()
+    for team, recap in ((home, home_recap), (away, away_recap)):
+        db.upsert_post_match_report(
+            conn,
+            PostMatchReport(
+                fixture_id=fixture.id,
+                team_id=team.id,
+                created_at=now,
+                content=recap,
+            ),
+        )
+    return {home.id: home_recap, away.id: away_recap}
 
 
 def update_dossier_after_match(
@@ -526,7 +707,7 @@ Facts only. No odds. No prediction. Do not restate the team's baseline identity.
         model_name=model.name,
         step="dossier_update",
         system=SYSTEM,
-        max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
+        max_tokens=INTEL_MAX_TOKENS,  # generous: reasoning must not starve the answer
         temperature=0.3,
     )
     db.log_model_call(conn, call)

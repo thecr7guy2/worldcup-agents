@@ -138,40 +138,20 @@ def due_for_bet(
     return out
 
 
-# ---- Post-match: per-team recap + guarded dossier fold -------------------
-
-
-def _match_label(fixture: Fixture, team, opp) -> str:
-    hg, ag = fixture.home_goals_90, fixture.away_goals_90
-    gf, ga = (hg, ag) if team.id == fixture.home_id else (ag, hg)
-    verb = "won" if gf > ga else "lost" if gf < ga else "drew"
-    extra = (
-        " (won on pens)"
-        if fixture.went_penalties
-        else " (a.e.t.)" if fixture.went_extra_time else ""
-    )
-    opp_name = opp.name if opp else "?"
-    return f"{fixture.stage.value} vs {opp_name}, {verb} {gf}-{ga} at 90'{extra}"
+# ---- Post-match: one match recap (both teams) + guarded dossier fold ------
 
 
 def _postprocess(conn: sqlite3.Connection, fixture: Fixture, now: datetime) -> None:
-    """Write each team's post-match recap (idempotent) and fold it into the dossier
-    exactly once (guarded by the dossier_update marker)."""
+    """Recap a finished fixture in ONE web search (both teams) and fold each team's recap
+    into its dossier exactly once (guarded by the dossier_update marker)."""
     home = db.get_team(conn, fixture.home_id) if fixture.home_id else None
     away = db.get_team(conn, fixture.away_id) if fixture.away_id else None
-    played_on = fixture.kickoff.date().isoformat()
-    for team, opp in ((home, away), (away, home)):
-        if team is None:
-            continue
-        recap = intelligence.build_post_match_report(
-            conn,
-            team,
-            match_label=_match_label(fixture, team, opp),
-            played_on=played_on,
-            fixture_id=fixture.id,
-        )
+    if home is None or away is None:
+        return  # a finished fixture always has both sides resolved; nothing to recap
+    recaps = intelligence.build_match_recap(conn, fixture)  # {team_id: recap}, 1 search
+    for team in (home, away):
         if not db.dossier_folded(conn, fixture.id, team.id):
-            intelligence.update_dossier_after_match(conn, team, recap)
+            intelligence.update_dossier_after_match(conn, team, recaps[team.id])
             db.mark_dossier_folded(conn, fixture.id, team.id, now.isoformat())
 
 
@@ -186,6 +166,7 @@ def _new_summary() -> dict:
         "resolved": 0,
         "decayed": 0,
         "briefed": 0,
+        "late": 0,
         "predicted": 0,
         "errors": [],
     }
@@ -249,8 +230,16 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"brief {f.id}: {e}")
 
-    # 7. Predict + bet for fixtures entering the bet window.
+    # 7. Late update (best-effort, near-kickoff delta) then predict + bet for fixtures
+    #    entering the bet window. The late update is appended to the briefing inside
+    #    run_fixture; a failed delta must never block the predictions, so it is its own
+    #    guarded step and predict() still runs on the base briefing if it errors.
     for f in due_for_bet(conn, fixtures, now):
+        try:
+            intelligence.build_late_update(conn, f, cutoff=now)
+            s["late"] += 1
+        except Exception as e:  # noqa: BLE001 - best-effort; never block the bet
+            s["errors"].append(f"late_update {f.id}: {e}")
         try:
             predict.run_fixture(conn, f.id)
             s["predicted"] += 1
@@ -270,7 +259,8 @@ def _cmd_tick(args: argparse.Namespace) -> None:
     print(
         f"tick — results:{s['results']} settled:{s['settled']} "
         f"postmatch:{s['postprocessed']} resolved:{s['resolved']} "
-        f"decay:{s['decayed']} briefed:{s['briefed']} predicted:{s['predicted']}"
+        f"decay:{s['decayed']} briefed:{s['briefed']} late:{s['late']} "
+        f"predicted:{s['predicted']}"
     )
     for err in s["errors"]:
         print(f"  ERROR {err}")

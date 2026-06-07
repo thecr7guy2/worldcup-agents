@@ -20,6 +20,7 @@ from .models import (
     BetResult,
     Competitor,
     Fixture,
+    LateUpdate,
     MatchBriefing,
     MatchStatus,
     ModelCall,
@@ -85,11 +86,16 @@ CREATE TABLE IF NOT EXISTS odds_snapshot (
 CREATE TABLE IF NOT EXISTS prediction (
     model_name      TEXT NOT NULL,
     fixture_id      INTEGER NOT NULL REFERENCES fixture(id),
-    winner          TEXT NOT NULL,
-    pred_home_goals INTEGER,                             -- predicted 90' scoreline
+    winner          TEXT NOT NULL,                       -- argmax of the 1X2 distribution
+    p_home          REAL,                                -- explicit 1X2 distribution (sums to 1)
+    p_draw          REAL,
+    p_away          REAL,
+    pred_home_goals INTEGER,                             -- most-likely 90' scoreline
     pred_away_goals INTEGER,
+    exp_home_goals  REAL,                                -- expected goals (Poisson means)
+    exp_away_goals  REAL,
     predicted_advance TEXT,                              -- knockout only: home/away who progresses
-    confidence      REAL NOT NULL,
+    confidence      REAL NOT NULL,                       -- = probability of `winner`
     reasoning       TEXT NOT NULL,
     created_at      TEXT NOT NULL,
     PRIMARY KEY (model_name, fixture_id)
@@ -160,6 +166,12 @@ CREATE TABLE IF NOT EXISTS match_briefing (
     content     TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS late_update (
+    fixture_id  INTEGER PRIMARY KEY REFERENCES fixture(id),
+    cutoff_at   TEXT NOT NULL,
+    content     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS post_match_report (
     fixture_id  INTEGER NOT NULL REFERENCES fixture(id),
     team_id     INTEGER NOT NULL REFERENCES team(id),
@@ -215,6 +227,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "prediction", "pred_home_goals", "INTEGER")
     _add_column_if_missing(conn, "prediction", "pred_away_goals", "INTEGER")
     _add_column_if_missing(conn, "prediction", "predicted_advance", "TEXT")
+    _add_column_if_missing(conn, "prediction", "p_home", "REAL")
+    _add_column_if_missing(conn, "prediction", "p_draw", "REAL")
+    _add_column_if_missing(conn, "prediction", "p_away", "REAL")
+    _add_column_if_missing(conn, "prediction", "exp_home_goals", "REAL")
+    _add_column_if_missing(conn, "prediction", "exp_away_goals", "REAL")
 
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
@@ -421,15 +438,21 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
     """Insert or replace one model's Step-1 prediction for a fixture."""
     conn.execute(
         "INSERT OR REPLACE INTO prediction "
-        "(model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
+        "(model_name, fixture_id, winner, p_home, p_draw, p_away, "
+        " pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
         " predicted_advance, confidence, reasoning, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             p.model_name,
             p.fixture_id,
             p.winner.value,
+            p.p_home,
+            p.p_draw,
+            p.p_away,
             p.pred_home_goals,
             p.pred_away_goals,
+            p.exp_home_goals,
+            p.exp_away_goals,
             p.predicted_advance.value if p.predicted_advance else None,
             p.confidence,
             p.reasoning,
@@ -451,7 +474,8 @@ def get_prediction(
 ) -> Prediction | None:
     """Fetch one model's prediction for a fixture, or None."""
     row = conn.execute(
-        "SELECT model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
+        "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
+        "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
         "predicted_advance, confidence, reasoning, created_at "
         "FROM prediction WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
@@ -660,7 +684,8 @@ def record_idle_decay(
 def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
     """Return every persisted prediction (for the accuracy leaderboard tally)."""
     rows = conn.execute(
-        "SELECT model_name, fixture_id, winner, pred_home_goals, pred_away_goals, "
+        "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
+        "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
         "predicted_advance, confidence, reasoning, created_at "
         "FROM prediction"
     ).fetchall()
@@ -759,6 +784,25 @@ def get_match_briefing(
         (fixture_id,),
     ).fetchone()
     return MatchBriefing(**dict(row)) if row else None
+
+
+def upsert_late_update(conn: sqlite3.Connection, u: LateUpdate) -> None:
+    """Insert or replace the per-fixture late delta (confirmed XI/injuries/weather; NO odds)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO late_update (fixture_id, cutoff_at, content) "
+        "VALUES (?, ?, ?)",
+        (u.fixture_id, u.cutoff_at.isoformat(), u.content),
+    )
+    conn.commit()
+
+
+def get_late_update(conn: sqlite3.Connection, fixture_id: int) -> LateUpdate | None:
+    """Fetch the late update for a fixture, or None."""
+    row = conn.execute(
+        "SELECT fixture_id, cutoff_at, content FROM late_update WHERE fixture_id = ?",
+        (fixture_id,),
+    ).fetchone()
+    return LateUpdate(**dict(row)) if row else None
 
 
 def upsert_post_match_report(conn: sqlite3.Connection, r: PostMatchReport) -> None:

@@ -116,16 +116,28 @@ class OddsSnapshot(BaseModel):
 class Prediction(BaseModel):
     """Step 1 — football judgment, made with odds HIDDEN.
 
-    The model commits to a 90-minute scoreline; `winner` is derived from it (one
-    source of truth). The score feeds the accuracy leaderboard only — it never
-    enters the BET step. Goals are nullable so pre-scoreline rows still load.
+    The model gives an explicit 1X2 probability distribution (`p_home/p_draw/p_away`,
+    normalised to sum 1); `winner` is the argmax of that distribution and `confidence`
+    is the winner's probability — so confidence is a genuine, calibratable number, not a
+    free-floating self-rating. `pred_home/away_goals` is the single most-likely scoreline
+    (it feeds the exact-score accuracy point and can legitimately disagree with `winner`,
+    e.g. likeliest score 1-1 while home win is the likeliest outcome). The distribution
+    feeds the accuracy leaderboard only — it never enters the BET step. All forecast
+    fields are nullable so older rows still load.
     """
 
     model_name: str
     fixture_id: int
     winner: Outcome
+    # Explicit 1X2 distribution over the 90' result (each in [0,1], normalised to sum 1).
+    p_home: float | None = None
+    p_draw: float | None = None
+    p_away: float | None = None
+    # Most-likely 90' scoreline + expected goals (Poisson-style means), for context.
     pred_home_goals: int | None = None
     pred_away_goals: int | None = None
+    exp_home_goals: float | None = None
+    exp_away_goals: float | None = None
     # Knockouts only: which side the model thinks ultimately PROGRESSES (counting
     # extra time / penalties). HOME or AWAY — never DRAW; None for group fixtures.
     predicted_advance: Outcome | None = None
@@ -136,6 +148,10 @@ class Prediction(BaseModel):
     @property
     def has_score(self) -> bool:
         return self.pred_home_goals is not None and self.pred_away_goals is not None
+
+    @property
+    def has_distribution(self) -> bool:
+        return None not in (self.p_home, self.p_draw, self.p_away)
 
 
 class Bet(BaseModel):
@@ -213,6 +229,19 @@ class MatchBriefing(BaseModel):
 
     fixture_id: int
     created_at: datetime
+    content: str
+
+
+class LateUpdate(BaseModel):
+    """Per-fixture late delta (confirmed XI, late injuries, matchday weather) fetched
+    just before predictions lock and appended to the briefing at predict time. NO odds.
+
+    Kept separate from MatchBriefing so the briefing artifact stays immutable; temporal
+    integrity is enforced by `cutoff_at` exactly as for PreMatchReport.
+    """
+
+    fixture_id: int
+    cutoff_at: datetime
     content: str
 
 

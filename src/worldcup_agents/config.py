@@ -77,11 +77,27 @@ POINTS_CORRECT_SCORE = 2  # right exact 90-minute scoreline (supersedes the abov
 POINTS_CORRECT_ADVANCE = 1  # knockout only: correctly called who progressed (ET/pens);
 # stacks on top of the 90' points, independent of them
 
+# ---- Intelligence research depth ----
+# Results per OpenRouter web search for intelligence calls. One broad search has to cover
+# availability, form, tactics, stakes, and conditions, so the default of 5 is too thin;
+# 12 gives the agent enough sources to corroborate availability claims.
+INTEL_WEB_MAX_RESULTS = 12
+
+# Completion-token ceiling for intelligence calls. The intelligence model is a reasoning
+# model: a tight cap (3-4k) gets entirely consumed by hidden reasoning, leaving empty
+# content and a failed briefing. The ceiling is not a target — billed only on use — so we
+# set it generously (matching the predictors) so reasoning never starves the answer.
+INTEL_MAX_TOKENS = 20000
+
+
 # ---- Orchestrator scheduling windows (hours relative to kickoff) ----
 # Build a fixture's briefing within this many hours before kickoff:
 BRIEF_LEAD_HOURS = 24.0
-# Run predict+bet within this many hours before kickoff:
-BET_LEAD_HOURS = 3.0
+# Run predict+bet within this many hours before kickoff. Kept tight (T-90m) so a late
+# update — confirmed XI, late injuries, matchday weather — is captured before predictions
+# lock; with 30-min ticks, predictions fire ~60-90 min out. Trade-off: less compute margin
+# on a busy matchday (mitigate by ticking every 15 min — see deploy/README.md).
+BET_LEAD_HOURS = 1.5
 # Wait this long after kickoff before trying to ingest a result:
 RESULT_DELAY_HOURS = 2.5
 
