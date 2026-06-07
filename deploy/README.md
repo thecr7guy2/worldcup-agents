@@ -45,8 +45,12 @@ and **no errors**. A keys/cwd problem surfaces here, not at 3 a.m. on matchday.
 
 ```bash
 deploy/install.sh        # renders the units with this checkout's path/user/uv, installs
-                         # to /etc/systemd/system (sudo), daemon-reload, enable --now
+                         # to /etc/systemd/system, daemon-reload, enable --now
 ```
+
+> Run it as **yourself**, not `sudo deploy/install.sh`. The script elevates internally only
+> where root is needed; running the whole thing under sudo makes `uv` resolve as root
+> (`/root/.local/bin/uv`) and the units come out broken. (It now refuses sudo and tells you.)
 
 Want to eyeball the units first? Render without touching the system:
 

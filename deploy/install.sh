@@ -2,16 +2,29 @@
 #
 # Render + install the World Cup Agents systemd timers.
 #
-#   deploy/install.sh                  install to /etc/systemd/system (uses sudo) + enable
-#   deploy/install.sh --render DIR     just write the substituted units to DIR (no sudo)
+#   deploy/install.sh                  install to /etc/systemd/system + enable
+#   deploy/install.sh --render DIR     just write the substituted units to DIR
+#
+# Run it as YOUR normal user (NOT `sudo deploy/install.sh`) — it calls sudo only for the
+# install steps that need root. Under sudo the whole script runs as root, so `uv` and $HOME
+# resolve to root's (/root/.local/bin/uv, which doesn't exist) and the units come out broken.
 #
 # The units carry __REPO__ / __USER__ / __UV__ tokens; this script fills them from the
 # current checkout, the invoking user, and the resolved `uv` path.
 set -euo pipefail
 
+# Guard the footgun: sudo from a normal account. (Logged in directly as root — no SUDO_USER
+# — is fine: uv/HOME then legitimately resolve as root.)
+if [[ ${EUID} -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+  echo "ERROR: don't run this under sudo. Run it as ${SUDO_USER}; it elevates internally" >&2
+  echo "       only where root is needed. (Under sudo, uv resolves to /root and the units" >&2
+  echo "       would point at a uv that doesn't exist.)" >&2
+  exit 1
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-RUN_USER="${SUDO_USER:-$(id -un)}"
+RUN_USER="$(id -un)"
 UV="$(command -v uv || true)"
 [[ -z "$UV" ]] && UV="$HOME/.local/bin/uv"   # PATH is often stripped for service users
 
