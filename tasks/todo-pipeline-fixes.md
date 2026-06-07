@@ -144,3 +144,28 @@ favored (no upset bias), opponent named, late update built + used. Frontend
 
 **Still open (deferred, post-kickoff):** #7 structured KB, #8 calibration/Brier
 leaderboards + Kelly + paid feeds + backtest.
+
+## 7. Review hardening (rounds 2 & 3, 2026-06-07)
+
+Two further adversarial review passes before deploy; all verified by unit checks + a green
+7/7 dry-run.
+
+Round 2:
+- Late update split into its OWN window (`due_for_late_update` ~T-75) ahead of predictions.
+- Accuracy scoring decoupled: outcome graded off `winner`, never inferred from an exact score.
+- `run_fixture` runs models with bounded concurrency (per-thread connections + busy_timeout)
+  and a pre-call kickoff check; tick cadence dropped to 15 min.
+- Bet prompt shows no-vig fair probabilities; `_prob` rejects NaN/inf.
+- `build_match_recap` fails CLOSED on missing markers (no dossier pollution).
+
+Round 3:
+- Bet decision uses EV vs the OFFERED odds (break-even 1/odds); bets that are -EV by the
+  model's own probabilities are overridden to a pass (`MIN_BET_EV`).
+- Late update refreshes if stale at predict time (`LATE_UPDATE_REFRESH_MIN`).
+- Kickoff re-checked inside `predict()`/`bet()` before every DB write (`KickoffPassed`).
+- `run_fixture` returns per-model `ModelRun` statuses; the tick reports partial fixtures
+  instead of counting them done.
+- Knockout `advances` always requested separately (never derived from the 90' winner).
+- Stake validation: finite + non-negative in parsing AND on `Bet.stake`.
+- Eliminated competitors still predict (accuracy) but bets are forced to pass.
+- Exact-score points require the outcome to also be correct.
