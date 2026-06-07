@@ -115,3 +115,48 @@ Edit `OnCalendar` in the `.timer` files, re-run `deploy/install.sh`, done.
   `~/.local/bin/uv`). If `uv` later moves, re-run the installer.
 - **Single gateway** — all models go through OpenRouter; on an outage the tick logs errors and
   retries the same due work next fire (nothing is lost — work is keyed off DB state, not time).
+
+---
+
+# The showcase site (the Arena)
+
+A public Next.js site that reads the live DB read-only and renders it as a video-game-style
+showcase (agent profiles, fixtures with flags, leaderboards, token/cost telemetry). Two
+long-running services, separate from the tournament timers above:
+
+| Service | Process | Bind | Role |
+|---|---|---|---|
+| `wc-api` | `uvicorn worldcup_agents.web.app:app` | 127.0.0.1:8001 | read-only JSON API over `worldcup.db` |
+| `wc-web` | `next start` | 0.0.0.0:3000 | the site; proxies `/api/*` to wc-api |
+
+## One-time: install Node
+
+The frontend needs Node 20+ at build and run time (the only non-Python dependency the server
+gains). Any install works; e.g. NodeSource, or a tarball symlinked into `~/.local/bin`.
+
+## Deploy / update
+
+```bash
+git pull && uv sync                      # API deps (fastapi, uvicorn) come from uv.lock
+cd web && npm ci && npm run build        # production build (required before `next start`)
+cd .. && deploy/install-web.sh           # render + install + enable wc-api and wc-web
+```
+
+The installer refuses to proceed if `web/.next` is missing (build first). To review the units
+without touching the system: `deploy/install-web.sh --render /tmp/units`.
+
+After a code change, redeploy with the three lines above (re-running `install-web.sh` is safe
+and also restarts the services), or just `sudo systemctl restart wc-api wc-web` if only data
+changed.
+
+## Verify
+
+```bash
+systemctl status wc-api.service wc-web.service --no-pager
+curl -s localhost:8001/api/health          # {"ok": true, ...}
+curl -s localhost:3000/api/overview | head # proxy + API both up
+```
+
+Open `http://<server-ip>:3000` on the LAN. The API stays private on localhost; only the Next
+server is exposed. The site degrades gracefully before kickoff and fills in automatically as
+predictions, bets, results, and telemetry land — no redeploy needed for new data.
