@@ -93,11 +93,23 @@ INTEL_MAX_TOKENS = 20000
 # ---- Orchestrator scheduling windows (hours relative to kickoff) ----
 # Build a fixture's briefing within this many hours before kickoff:
 BRIEF_LEAD_HOURS = 24.0
-# Run predict+bet within this many hours before kickoff. Kept tight (T-90m) so a late
-# update — confirmed XI, late injuries, matchday weather — is captured before predictions
-# lock; with 30-min ticks, predictions fire ~60-90 min out. Trade-off: less compute margin
-# on a busy matchday (mitigate by ticking every 15 min — see deploy/README.md).
-BET_LEAD_HOURS = 1.5
+# Fetch the late update (confirmed XI / injuries / weather) in its OWN window, a step
+# BEFORE predictions, so official lineups have time to land between the two. With a 15-min
+# tick the update fires ~T-75..T-60 and predictions lock ~T-50..T-35 — at least one tick
+# apart. The two windows must NOT overlap: LATE_UPDATE_LEAD_HOURS > BET_LEAD_HOURS.
+LATE_UPDATE_LEAD_HOURS = 1.25  # ~75 min
+# Run predict+bet within this many hours before kickoff (~50 min):
+BET_LEAD_HOURS = 0.83
+# Predict+bet are independent per model, so run them concurrently to fit the tight window
+# even when several fixtures kick off together. Bounded to avoid hammering the gateway.
+PREDICT_MAX_WORKERS = 6
+# Refresh a cached late update at predict time if it is older than this many minutes, so
+# confirmed lineups that landed since the first (~T-75) fetch are picked up before the lock.
+LATE_UPDATE_REFRESH_MIN = 20.0
+# Minimum expected value for a bet to stand: EV = model_prob(pick) * decimal_odds - 1. A bet
+# that is non-positive by the model's OWN probabilities is internally inconsistent (negative
+# expected value at the offered price) and is overridden to a pass. 0.0 = require any +EV.
+MIN_BET_EV = 0.0
 # Wait this long after kickoff before trying to ingest a result:
 RESULT_DELAY_HOURS = 2.5
 

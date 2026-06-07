@@ -160,7 +160,8 @@ class Bet(BaseModel):
     model_name: str
     fixture_id: int
     pick: Outcome | None = None
-    stake: float = 0.0
+    # A stake is real money: never negative, never NaN/inf (which JSON parsing lets through).
+    stake: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     odds_at_bet: float | None = None  # decimal odds for the pick at bet time
     reasoning: str = ""
     created_at: datetime

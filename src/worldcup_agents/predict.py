@@ -14,13 +14,22 @@ uninfluenced by the market. Confidence from Step 1 is the bridge into the stake.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db
-from .config import MAX_STAKE_FRACTION, PREDICTION_MODELS, ModelSpec
+from .config import (
+    MAX_STAKE_FRACTION,
+    MIN_BET_EV,
+    PREDICT_MAX_WORKERS,
+    PREDICTION_MODELS,
+    ModelSpec,
+)
 from .llm import LLMError, complete, extract_json
 from .models import (
     Bet,
@@ -31,6 +40,27 @@ from .models import (
     Prediction,
     Stage,
 )
+
+
+class KickoffPassed(RuntimeError):
+    """Raised inside predict()/bet() when kickoff arrives mid-call, so nothing is persisted
+    after the match has started (temporal integrity for a slow LLM response)."""
+
+
+@dataclass
+class ModelRun:
+    """Per-model outcome of run_fixture, so partial fixtures are reported honestly rather
+    than counted as fully successful.
+
+    status: "ok" (predicted + bet), "predicted_only" (bet skipped at kickoff),
+    "skipped_kickoff" (kickoff already passed before predicting), or "error".
+    """
+
+    model_name: str
+    status: str
+    prediction: Prediction | None = None
+    bet: Bet | None = None
+    error: str | None = None
 
 # Two system prompts, one per step — both identical across all five competitors, so the
 # only variable under test stays the model (DESIGN §5 "mindset induction").
@@ -129,10 +159,12 @@ def predict(
     is_knockout = fixture.stage != Stage.GROUP
     advance_field = '"advances": "home" | "away", ' if is_knockout else ""
     advance_note = (
-        f'\nThis is a KNOCKOUT match: also give "advances" — who you think ultimately '
-        f"PROGRESSES counting extra time and penalties ({home}=home, {away}=away). It "
-        f"matters most when your 90-minute score is a DRAW; if your score is decisive, "
-        f"it is simply the winner."
+        f'\nThis is a KNOCKOUT match: ALSO give "advances" — who ultimately PROGRESSES to '
+        f"the next round, counting extra time and penalties ({home}=home, {away}=away). "
+        f"Decide this SEPARATELY from the 90-minute result: a side can be the more likely "
+        f"90-minute winner yet the less likely to progress over 120 minutes + penalties "
+        f"(e.g. a team chasing the tie, or stronger from the spot). Always give your best "
+        f"call regardless of your 90-minute score."
         if is_knockout
         else ""
     )
@@ -176,9 +208,14 @@ scoreline — it may differ from the most probable outcome, which is fine.{advan
 
     def _prob(key: str) -> float:
         try:
-            return max(0.0, float(data[key]))
+            v = float(data[key])
         except (KeyError, ValueError, TypeError):
             raise LLMError(f"{model.name}: invalid/missing {key} in {data!r}")
+        # Python's json.loads accepts NaN/Infinity — reject them before they poison the
+        # normalisation (NaN would propagate; inf would make every other prob normalise to 0).
+        if not math.isfinite(v):
+            raise LLMError(f"{model.name}: non-finite {key}={v!r} in {data!r}")
+        return max(0.0, v)
 
     total = _prob("p_home") + _prob("p_draw") + _prob("p_away")
     if total <= 0:
@@ -204,25 +241,28 @@ scoreline — it may differ from the most probable outcome, which is fine.{advan
             v = float(data[key])
         except (KeyError, ValueError, TypeError):
             return None
-        return v if v >= 0 else None
+        return v if (math.isfinite(v) and v >= 0) else None
 
     exp_home_goals, exp_away_goals = _xg("expected_home_goals"), _xg("expected_away_goals")
 
-    # Knockouts: who advances. A decisive 90' outcome forces the advancer (the winner);
-    # only a predicted 90' DRAW needs the model's explicit call.
+    # Knockouts: who advances. Always taken from the model's EXPLICIT call (not derived from
+    # the 90' winner) — a side can be the 90' favourite yet less likely to progress over
+    # ET + penalties, so the two are predicted independently.
     predicted_advance: Outcome | None = None
     if is_knockout:
-        if winner is not Outcome.DRAW:
-            predicted_advance = winner
-        else:
-            adv = str(data.get("advances", "")).strip().lower()
-            if adv not in {"home", "away"}:
-                raise LLMError(
-                    f"{model.name}: knockout 90'-draw needs 'advances' home/away in {data!r}"
-                )
-            predicted_advance = Outcome.HOME if adv == "home" else Outcome.AWAY
+        adv = str(data.get("advances", "")).strip().lower()
+        if adv not in {"home", "away"}:
+            raise LLMError(
+                f"{model.name}: knockout needs 'advances' home/away in {data!r}"
+            )
+        predicted_advance = Outcome.HOME if adv == "home" else Outcome.AWAY
 
     reasoning = str(data.get("reasoning", "")).strip()
+
+    # Kickoff guard (P1-3): a slow response can arrive after KO — never persist a prediction
+    # for a match that has already started.
+    if _now() >= fixture.kickoff:
+        raise KickoffPassed(f"{model.name}: kickoff passed before predicting {fixture.id}")
 
     pred = Prediction(
         model_name=model.name,
@@ -287,21 +327,33 @@ def bet(
             f"  winner={prediction.winner.value}, confidence={prediction.confidence:.2f}"
         )
 
+    # Two market reference points per outcome:
+    #  - FAIR (no-vig): 1/odds normalised to sum 1 — the market's margin-removed probability
+    #    estimate (shows whether YOU disagree with the market).
+    #  - BREAK-EVEN: 1/odds with the margin still in — the win probability a bet must clear
+    #    just to not lose money at the OFFERED price (this is what EV is measured against).
+    raw = (1 / odds.home, 1 / odds.draw, 1 / odds.away)
+    vig = sum(raw)
+    fair_home, fair_draw, fair_away = (r / vig for r in raw)
+
     prompt = f"""MATCH: {home} (home) vs {away} (away) — 90-minute result.
 
 YOUR earlier forecast (odds were hidden then):
 {forecast_line}
   reasoning: {prediction.reasoning}
 
-NOW the market 1X2 decimal odds (payout = stake x odds on a win); the percentage is the \
-market-implied probability (1/odds, includes the bookmaker margin):
-  home ({home}): {odds.home}  (~{1 / odds.home:.0%})
-  draw:          {odds.draw}  (~{1 / odds.draw:.0%})
-  away ({away}): {odds.away}  (~{1 / odds.away:.0%})
+NOW the market 1X2 decimal odds (payout = stake x odds on a win). "fair" is the market's \
+margin-removed probability; "break-even" (1/odds, margin included) is the win probability \
+the bet must beat just to not lose money:
+  home ({home}): {odds.home}  (fair ~{fair_home:.0%}, break-even ~{1 / odds.home:.0%})
+  draw:          {odds.draw}  (fair ~{fair_draw:.0%}, break-even ~{1 / odds.draw:.0%})
+  away ({away}): {odds.away}  (fair ~{fair_away:.0%}, break-even ~{1 / odds.away:.0%})
 
-You have an edge when YOUR probability for an outcome is meaningfully higher than the \
-market-implied one. Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%). \
-Bet only where you see value; you may PASS (stake 0). Stake must not exceed the cap.
+A bet is profitable only when YOUR probability for that outcome beats its BREAK-EVEN — i.e. \
+expected value = your_probability x odds - 1 is positive. Bet ONLY on a clearly positive-EV \
+outcome; otherwise PASS (a bet that is negative-EV by your own probabilities will be \
+overridden to a pass). Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%). \
+Stake must not exceed the cap.
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \
@@ -322,11 +374,38 @@ Respond with ONLY a JSON object, no other text:
 
     data = extract_json(text)
     raw_pick = str(data.get("pick", "pass")).strip().lower()
-    stake = float(data.get("stake", 0) or 0)
     reasoning = str(data.get("reasoning", "")).strip()
 
-    if raw_pick not in {"home", "draw", "away"} or stake <= 0:
-        # Pass — record it explicitly (stake 0, no pick).
+    # Stake validation (P2-2): json.loads lets NaN/inf through — coerce anything invalid,
+    # non-finite, or negative to 0 (a pass).
+    try:
+        stake = float(data.get("stake", 0) or 0)
+    except (TypeError, ValueError):
+        stake = 0.0
+    if not math.isfinite(stake) or stake < 0:
+        stake = 0.0
+
+    pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
+
+    # Negative-EV guard (P1-1): a bet must be positive-EV by the model's OWN probability at
+    # the OFFERED odds (EV = p*odds - 1). The offered odds — not the no-vig fair number — are
+    # what the bet pays, so a bet that loses money by the model's own forecast is overridden
+    # to a pass (also catches the "confident but bet anyway" inconsistency).
+    if pick is not None and stake > 0 and prediction.has_distribution:
+        p_pick = {
+            Outcome.HOME: prediction.p_home,
+            Outcome.DRAW: prediction.p_draw,
+            Outcome.AWAY: prediction.p_away,
+        }[pick]
+        ev = p_pick * _odds_for(odds, pick) - 1
+        if ev <= MIN_BET_EV:
+            reasoning = (
+                f"{reasoning}  [auto-pass: EV {ev:+.2f} ≤ {MIN_BET_EV:+.2f} "
+                "by own probabilities]"
+            ).strip()
+            pick, stake = None, 0.0
+
+    if pick is None or stake <= 0:
         result = Bet(
             model_name=model.name,
             fixture_id=fixture.id,
@@ -337,7 +416,6 @@ Respond with ONLY a JSON object, no other text:
             created_at=_now(),
         )
     else:
-        pick = Outcome(raw_pick)
         stake = min(stake, cap)  # enforce the cap regardless of what the model said
         result = Bet(
             model_name=model.name,
@@ -348,6 +426,10 @@ Respond with ONLY a JSON object, no other text:
             reasoning=reasoning,
             created_at=_now(),
         )
+
+    # Kickoff guard (P1-3): never persist a bet after the match has started.
+    if _now() >= fixture.kickoff:
+        raise KickoffPassed(f"{model.name}: kickoff passed before betting {fixture.id}")
     db.upsert_bet(conn, result)
     return result
 
@@ -355,10 +437,42 @@ Respond with ONLY a JSON object, no other text:
 # ---- Orchestration -------------------------------------------------------
 
 
+def _record_pass(
+    conn: sqlite3.Connection,
+    model: ModelSpec,
+    fixture: Fixture,
+    reason: str,
+    *,
+    force: bool = False,
+) -> Bet:
+    """Persist an explicit pass (no LLM call). Used for eliminated competitors, whose bets
+    are disabled but whose predictions still run for the accuracy board."""
+    if not force:
+        existing = db.get_bet(conn, model.name, fixture.id)
+        if existing:
+            return existing
+    b = Bet(
+        model_name=model.name,
+        fixture_id=fixture.id,
+        pick=None,
+        stake=0.0,
+        odds_at_bet=None,
+        reasoning=reason,
+        created_at=_now(),
+    )
+    db.upsert_bet(conn, b)
+    return b
+
+
 def run_fixture(
     conn: sqlite3.Connection, fixture_id: int, *, force: bool = False
-) -> list[tuple[Prediction, Bet]]:
-    """Run all five competitors through both steps for one fixture (idempotent)."""
+) -> list[ModelRun]:
+    """Run all competitors through both steps for one fixture (idempotent, concurrent).
+
+    Returns one ModelRun per competitor (always len == PREDICTION_MODELS) carrying each
+    model's status, so the caller can report partial fixtures honestly rather than treating
+    any return as full success.
+    """
     fixture = db.get_fixture(conn, fixture_id)
     if fixture is None:
         raise ValueError(f"no fixture with id {fixture_id}")
@@ -383,17 +497,51 @@ def run_fixture(
     late = db.get_late_update(conn, fixture_id)
     late_content = late.content if late else None
 
-    out: list[tuple[Prediction, Bet]] = []
-    for model in PREDICTION_MODELS:
-        comp = db.get_competitor(conn, model.name)
-        bankroll = comp.bankroll if comp else 0.0
-        pred = predict(
-            conn, model, fixture, briefing, home, away,
-            late_update=late_content, force=force,
-        )
-        b = bet(conn, model, fixture, pred, odds, bankroll, home, away, force=force)
-        out.append((pred, b))
-    return out
+    # Each model's predict+bet is independent. On a busy matchday several fixtures kick off
+    # together (e.g. the final group round), so run the models CONCURRENTLY — bounded — to
+    # fit the tight pre-kickoff window. sqlite connections aren't thread-safe, so each worker
+    # opens its OWN on the same db file (works for the live DB and throwaway test DBs alike).
+    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
+
+    def _run_one(model: ModelSpec) -> ModelRun:
+        own = db.connect(db_path) if db_path else conn
+        try:
+            # Never start after kickoff: a long tick, or a fixture queued behind others,
+            # can drift past KO — re-check right before the slow calls.
+            if _now() >= fixture.kickoff:
+                return ModelRun(model.name, "skipped_kickoff")
+            comp = db.get_competitor(own, model.name)
+            active = comp.active if comp else True
+            bankroll = comp.bankroll if comp else 0.0
+            try:
+                pred = predict(
+                    own, model, fixture, briefing, home, away,
+                    late_update=late_content, force=force,
+                )
+            except KickoffPassed:
+                return ModelRun(model.name, "skipped_kickoff")
+            # Eliminated competitors (P2-3): keep predicting for the accuracy board, but
+            # betting is disabled — record an explicit pass instead of calling the bet model.
+            if not active:
+                b = _record_pass(
+                    own, model, fixture, "eliminated — betting disabled", force=force
+                )
+                return ModelRun(model.name, "ok", pred, b)
+            try:
+                b = bet(own, model, fixture, pred, odds, bankroll, home, away, force=force)
+            except KickoffPassed:
+                return ModelRun(model.name, "predicted_only", pred, None)
+            return ModelRun(model.name, "ok", pred, b)
+        except Exception as e:  # noqa: BLE001 - capture per-model failure; never abort others
+            return ModelRun(model.name, "error", error=f"{type(e).__name__}: {e}")
+        finally:
+            if db_path:
+                own.close()
+
+    if db_path and PREDICT_MAX_WORKERS > 1:
+        with ThreadPoolExecutor(max_workers=PREDICT_MAX_WORKERS) as ex:
+            return list(ex.map(_run_one, PREDICTION_MODELS))
+    return [_run_one(m) for m in PREDICTION_MODELS]
 
 
 # ---- CLI -----------------------------------------------------------------
@@ -435,7 +583,7 @@ def format_reasoning(
 def _cmd_predict(args: argparse.Namespace) -> None:
     conn = db.connect()
     db.init_db(conn)
-    results = run_fixture(conn, args.fixture_id, force=args.force)
+    runs = run_fixture(conn, args.fixture_id, force=args.force)
     fixture = db.get_fixture(conn, args.fixture_id)
     home = db.get_team(conn, fixture.home_id).name
     away = db.get_team(conn, fixture.away_id).name
@@ -444,7 +592,8 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         f"{'model':<18}{'predict':<8}{'score':>6}{'conf':>7}"
         f"{'bet':>7}{'stake':>12}{'odds':>7}"
     )
-    for pred, b in results:
+    completed = [(r.prediction, r.bet) for r in runs if r.status == "ok"]
+    for pred, b in completed:
         pick = b.pick.value if b.pick else "pass"
         odds = f"{b.odds_at_bet:.2f}" if b.odds_at_bet else "—"
         score = (
@@ -454,9 +603,15 @@ def _cmd_predict(args: argparse.Namespace) -> None:
             f"{pred.model_name:<18}{pred.winner.value:<8}{score:>6}{pred.confidence:>7.2f}"
             f"{pick:>7}{b.stake:>12,.0f}{odds:>7}"
         )
+    # Report any model that did not fully complete (P1-4) — never hide a partial run.
+    incomplete = [r for r in runs if r.status != "ok"]
+    if incomplete:
+        print(f"\nIncomplete ({len(incomplete)}/{len(runs)}):")
+        for r in incomplete:
+            print(f"  {r.model_name:<18}{r.status}{f' — {r.error}' if r.error else ''}")
 
     if args.reasons:
-        md = format_reasoning(args.fixture_id, home, away, results)
+        md = format_reasoning(args.fixture_id, home, away, completed)
         print("\n" + md)
         out = Path(".cache") / f"reasoning-fixture-{args.fixture_id}.md"
         out.parent.mkdir(exist_ok=True)

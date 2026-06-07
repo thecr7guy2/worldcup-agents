@@ -201,6 +201,9 @@ def connect(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Predict+bet run concurrently (one connection per worker thread); make a writer that
+    # finds the DB momentarily locked wait rather than error out with "database is locked".
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 

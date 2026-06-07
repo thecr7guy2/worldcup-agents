@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import db
 from .config import (
@@ -433,17 +433,27 @@ def build_late_update(
     cutoff: datetime,
     model: ModelSpec = INTELLIGENCE_MODEL,
     force: bool = False,
+    max_age_minutes: float | None = None,
 ) -> LateUpdate:
     """Fetch a short late delta for a fixture: confirmed XI, late injuries/suspensions,
     and matchday weather — the things that move between the T-24h briefing and kickoff.
 
     Appended to the briefing at predict time (the briefing artifact stays immutable).
     Temporal integrity: `cutoff` must be before kickoff; NO odds, NO prediction.
+
+    Idempotent by default. With `max_age_minutes`, a cached update OLDER than that is
+    refreshed instead of reused — so the first (~T-75) fetch can be replaced by a fresher
+    one near the lock (~T-50), picking up lineups that have since been confirmed.
     """
     if not force:
         existing = db.get_late_update(conn, fixture.id)
-        if existing:
-            return existing
+        if existing is not None:
+            age_ok = (
+                max_age_minutes is None
+                or (cutoff - existing.cutoff_at) <= timedelta(minutes=max_age_minutes)
+            )
+            if age_ok:
+                return existing
 
     if fixture.kickoff <= cutoff:
         raise ValueError(
@@ -637,13 +647,18 @@ EACH team's block UNDER ~200 words. Facts only. No odds. No prediction."""
     if not content:
         raise LLMError(f"match recap for fixture {fixture.id} came back empty")
 
-    # Split into per-team recaps on the AWAY marker; if the model dropped the markers,
-    # fall back to the whole recap for both (the dossier-update step extracts per team).
-    home_recap, away_recap = content, content
-    if "[[AWAY]]" in content:
-        before, after = content.split("[[AWAY]]", 1)
-        home_recap = before.replace("[[HOME]]", "").strip() or content
-        away_recap = after.strip() or content
+    # Split into per-team recaps on the markers. Fail CLOSED if they're missing or a block
+    # is empty: better to raise and let the next tick retry than to store the combined
+    # both-teams blob into BOTH dossiers and pollute them.
+    if "[[HOME]]" not in content or "[[AWAY]]" not in content:
+        raise LLMError(
+            f"match recap for fixture {fixture.id} missing [[HOME]]/[[AWAY]] markers"
+        )
+    before, after = content.split("[[AWAY]]", 1)
+    home_recap = before.split("[[HOME]]", 1)[-1].strip()
+    away_recap = after.strip()
+    if not home_recap or not away_recap:
+        raise LLMError(f"match recap for fixture {fixture.id} had an empty team block")
 
     now = _now()
     for team, recap in ((home, home_recap), (away, away_recap)):

@@ -57,17 +57,26 @@ def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
             {"points": 0, "exact": 0, "outcomes": 0, "advance": 0, "total": 0},
         )
         t["total"] += 1
+        # Outcome is graded off `winner` (argmax of the 1X2 distribution); the exact scoreline
+        # is graded off the separate `pred_*_goals` modal score. They can disagree (winner=home
+        # while modal score is 1-1). To keep points unambiguous, the exact-score bonus is only
+        # awarded when the OUTCOME is also correct — i.e. the forecast is internally coherent
+        # (a 1-1 modal score earns the exact bonus only if the model's winner was DRAW). A
+        # correct outcome with the wrong score scores the outcome point; a wrong outcome scores
+        # nothing, even if the modal score happened to match.
+        outcome_correct = p.winner == fx.result_90()
         exact = (
-            p.has_score
+            outcome_correct
+            and p.has_score
             and p.pred_home_goals == fx.home_goals_90
             and p.pred_away_goals == fx.away_goals_90
         )
+        if outcome_correct:
+            t["outcomes"] += 1
         if exact:
             t["exact"] += 1
-            t["outcomes"] += 1
-            t["points"] += POINTS_CORRECT_SCORE
-        elif p.winner == fx.result_90():
-            t["outcomes"] += 1
+            t["points"] += POINTS_CORRECT_SCORE  # supersedes the outcome point
+        elif outcome_correct:
             t["points"] += POINTS_CORRECT_OUTCOME
 
         # Knockout-only: who advanced (penalties count). Independent of the 90' points;

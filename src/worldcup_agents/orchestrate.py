@@ -33,6 +33,8 @@ from . import bracket, db, intelligence, predict, results, settlement
 from .config import (
     BET_LEAD_HOURS,
     BRIEF_LEAD_HOURS,
+    LATE_UPDATE_LEAD_HOURS,
+    LATE_UPDATE_REFRESH_MIN,
     PREDICTION_MODELS,
     RESULT_DELAY_HOURS,
 )
@@ -116,12 +118,34 @@ def due_for_brief(
     return out
 
 
+def due_for_late_update(
+    conn: sqlite3.Connection, fixtures: list[Fixture], now: datetime
+) -> list[Fixture]:
+    """Scheduled fixtures in the late-update window — after the brief lead, BEFORE the bet
+    window — that have a briefing but no late update yet. Run a step ahead of predictions
+    so confirmed lineups have time to land between the update and the lock."""
+    out = []
+    for f in fixtures:
+        if f.status != MatchStatus.SCHEDULED:
+            continue
+        h = _hours_until(f.kickoff, now)
+        if not (BET_LEAD_HOURS < h <= LATE_UPDATE_LEAD_HOURS):
+            continue
+        if db.get_match_briefing(conn, f.id) is None:
+            continue
+        if db.get_late_update(conn, f.id) is None:
+            out.append(f)
+    return out
+
+
 def due_for_bet(
     conn: sqlite3.Connection, fixtures: list[Fixture], now: datetime
 ) -> list[Fixture]:
     """Scheduled fixtures inside the bet window with a briefing AND odds present, where
     not every competitor has bet yet. (Predict + bet run together — predictions are
-    judged with odds hidden, then the bet sees them, all before kickoff.)"""
+    judged with odds hidden, then the bet sees them, all before kickoff. The late update,
+    if any, was fetched in an earlier window and is appended to the briefing at predict
+    time.)"""
     out = []
     for f in fixtures:
         if f.status != MatchStatus.SCHEDULED:
@@ -230,19 +254,39 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"brief {f.id}: {e}")
 
-    # 7. Late update (best-effort, near-kickoff delta) then predict + bet for fixtures
-    #    entering the bet window. The late update is appended to the briefing inside
-    #    run_fixture; a failed delta must never block the predictions, so it is its own
-    #    guarded step and predict() still runs on the base briefing if it errors.
-    for f in due_for_bet(conn, fixtures, now):
+    # 7. Late update (best-effort, near-kickoff delta) in its OWN window, a step ahead of
+    #    predictions so confirmed lineups can land before the lock. Failing here never
+    #    blocks anything — predict() falls back to the base briefing.
+    for f in due_for_late_update(conn, fixtures, now):
         try:
             intelligence.build_late_update(conn, f, cutoff=now)
             s["late"] += 1
-        except Exception as e:  # noqa: BLE001 - best-effort; never block the bet
+        except Exception as e:  # noqa: BLE001 - best-effort; never block the pipeline
             s["errors"].append(f"late_update {f.id}: {e}")
+
+    # 8. Predict + bet for fixtures in the (later, tighter) bet window. First refresh the
+    #    late update if the early one has gone stale, so the freshest lineups inform the lock.
+    for f in due_for_bet(conn, fixtures, now):
         try:
-            predict.run_fixture(conn, f.id)
-            s["predicted"] += 1
+            intelligence.build_late_update(
+                conn, f, cutoff=now, max_age_minutes=LATE_UPDATE_REFRESH_MIN
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort; the cached update still stands
+            s["errors"].append(f"late_refresh {f.id}: {e}")
+        try:
+            runs = predict.run_fixture(conn, f.id)
+            done = [r for r in runs if r.status == "ok"]
+            if runs and len(done) == len(runs):
+                s["predicted"] += 1
+            else:
+                # Report partial runs explicitly — never count an incomplete fixture as done.
+                missing = ", ".join(
+                    f"{r.model_name}={r.status}" for r in runs if r.status != "ok"
+                )
+                s["errors"].append(
+                    f"predict {f.id}: incomplete {len(done)}/{len(runs)} "
+                    f"({missing or 'none ran'})"
+                )
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"predict {f.id}: {e}")
 
@@ -276,6 +320,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
         "settle": due_for_settle(conn, fixtures),
         "postmatch": due_for_postprocess(conn, fixtures),
         "brief": due_for_brief(conn, fixtures, now),
+        "late": due_for_late_update(conn, fixtures, now),
         "bet": due_for_bet(conn, fixtures, now),
     }
     print(f"Orchestrator status @ {now.isoformat()} (UTC)")
