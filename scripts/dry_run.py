@@ -81,7 +81,7 @@ def _seed(path: Path) -> tuple[sqlite3.Connection, Fixture]:
 
 def _print_table(results: list[tuple]) -> None:
     print(
-        f"\n{'model':<18}{'predict':<8}{'score':>6}{'conf':>7}"
+        f"\n{'model':<18}{'predict':<8}{'P(H/D/A)':>18}{'score':>6}{'conf':>7}"
         f"{'bet':>7}{'stake':>12}{'odds':>7}"
     )
     for pred, b in results:
@@ -90,9 +90,14 @@ def _print_table(results: list[tuple]) -> None:
         score = (
             f"{pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else "—"
         )
+        probs = (
+            f"{pred.p_home:.0%}/{pred.p_draw:.0%}/{pred.p_away:.0%}"
+            if pred.has_distribution
+            else "—"
+        )
         print(
-            f"{pred.model_name:<18}{pred.winner.value:<8}{score:>6}{pred.confidence:>7.2f}"
-            f"{pick:>7}{b.stake:>12,.0f}{odds:>7}"
+            f"{pred.model_name:<18}{pred.winner.value:<8}{probs:>18}{score:>6}"
+            f"{pred.confidence:>7.2f}{pick:>7}{b.stake:>12,.0f}{odds:>7}"
         )
 
 
@@ -149,6 +154,16 @@ def main() -> None:
         raise SystemExit(1)
     print("\n" + "-" * 72 + "\n" + briefing.content + "\n" + "-" * 72)
 
+    # --- Late update (Slice 5): near-kickoff delta appended to the briefing ---
+    print("\n[1b/2] Building late update (confirmed XI / injuries / weather)…")
+    late_content = None
+    try:
+        late = intelligence.build_late_update(conn, fixture, cutoff=_now())
+        late_content = late.content
+        print("\n" + "-" * 72 + "\n" + late_content + "\n" + "-" * 72)
+    except Exception as e:  # noqa: BLE001 — best-effort, mirrors the orchestrator
+        print(f"  ⚠️  late update unavailable ({type(e).__name__}: {e}) — continuing")
+
     # --- Predict + bet (the exact run_fixture loop; per-model errors are surfaced) ---
     print(
         f"\n[2/2] Running {len(models)} competitor(s) — predict (odds hidden) then bet…"
@@ -160,7 +175,9 @@ def main() -> None:
         try:
             comp = db.get_competitor(conn, model.name)
             bankroll = comp.bankroll if comp else 0.0
-            pred = predict.predict(conn, model, fixture, briefing, HOME, AWAY)
+            pred = predict.predict(
+                conn, model, fixture, briefing, HOME, AWAY, late_update=late_content
+            )
             b = predict.bet(conn, model, fixture, pred, odds, bankroll, HOME, AWAY)
             results.append((pred, b))
             print(f"  ✓ {model.name}")
