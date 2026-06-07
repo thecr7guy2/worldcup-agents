@@ -66,3 +66,15 @@ Failure modes discovered, the signal that caught them, and the prevention rule.
   mechanic (here: need `bankroll*(1-0.25) <= floor` ⇒ `bankroll <= 13_333`), don't eyeball a
   "looks close enough" constant. A test whose fixture isn't computed from the rule can pass or fail
   for the wrong reason.
+
+## L7 — Reasoning models need a generous max_tokens or they return empty (2026-06-07)
+- **Failure mode:** intelligence calls were capped at `max_tokens=3000-4000`. The reasoning
+  model (deepseek-v4-pro) spent the ENTIRE budget on hidden reasoning
+  (`completion_tokens=3000`, `reasoning_tokens=3000`) and returned empty content
+  (`finish_reason=length`), so the briefing failed. It was intermittent — the 1-model dry run
+  got lucky; the 7-model run hit it — making it the kind of bug that would surface live at 3am.
+- **Detection signal:** `LLMError: empty content (finish_reason=length ...)` from the full
+  `dry_run.py`, NOT the cheap one — the value of running the full gate, not just the smoke.
+- **Prevention rule:** for a reasoning model, `max_tokens` must cover reasoning PLUS the answer;
+  a cap sized for the answer alone starves the output. Set ceilings generously (billed on use,
+  not on the cap) and match them across call sites. `llm.py` already warned about exactly this.
