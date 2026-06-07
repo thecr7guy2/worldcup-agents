@@ -6,8 +6,8 @@ import {
   Trophy,
 } from "@phosphor-icons/react/dist/ssr";
 import { getOverview, getCompetitors, getFixtures } from "@/lib/api";
-import { money, compact, kickoffParts, stageLabel, impliedProbs } from "@/lib/format";
-import { MarketFavorites, type FavoriteItem } from "@/components/MarketFavorites";
+import { money, compact, kickoffParts, stageLabel } from "@/lib/format";
+import { TournamentPulse, type PulseDay } from "@/components/TournamentPulse";
 import { Reveal } from "@/components/Reveal";
 import { StatBand } from "@/components/StatBand";
 import { AgentMini } from "@/components/AgentMini";
@@ -29,28 +29,21 @@ export default async function ArenaPage() {
     .slice(0, 6);
   const next = overview.next_fixture;
 
-  // Market favorites — strongest single-team implied probability across upcoming
-  // fixtures. Pure odds math, so this populates today, before any match is played.
-  const favorites: FavoriteItem[] = fixtures
-    .filter(
-      (f) =>
-        f.status === "scheduled" &&
-        f.odds != null &&
-        f.home.resolved &&
-        f.away.resolved,
-    )
-    .map((f) => {
-      const p = impliedProbs(f.odds!);
-      const homeFav = p.home >= p.away;
-      return {
-        fixtureId: f.id,
-        label: homeFav ? f.home.name : f.away.name,
-        opponent: homeFav ? f.away.name : f.home.name,
-        prob: homeFav ? p.home : p.away,
-      };
-    })
-    .sort((a, b) => b.prob - a.prob)
-    .slice(0, 8);
+  const byDay = new Map<string, PulseDay>();
+  const nextDate = next ? new Date(next.kickoff).toISOString().slice(0, 10) : null;
+  for (const fixture of fixtures) {
+    const date = new Date(fixture.kickoff).toISOString().slice(0, 10);
+    const day = byDay.get(date) ?? {
+      date,
+      group: 0,
+      knockout: 0,
+      isNext: date === nextDate,
+    };
+    if (fixture.stage === "group") day.group += 1;
+    else day.knockout += 1;
+    byDay.set(date, day);
+  }
+  const pulseDays = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <div className="flex flex-col gap-16 sm:gap-24">
@@ -79,8 +72,10 @@ export default async function ArenaPage() {
               </h1>
               <div className="mt-8 grid max-w-3xl gap-6 sm:grid-cols-[1fr_auto] sm:items-end">
                 <p className="max-w-[48ch] text-base font-medium leading-relaxed text-white/80 sm:text-lg">
-                  Seven AI agents get the same match briefing and a virtual $1M bankroll.
-                  They predict every fixture, choose their own stakes, and make every call public.
+                  Seven leading AI models compete to predict the 2026 World Cup. Before each
+                  match, they receive the same facts with the betting odds hidden. Then every
+                  model predicts the result, decides how much of its virtual $1 million to risk,
+                  and publishes the decision.
                 </p>
                 <Link
                   href="/roster"
@@ -223,27 +218,23 @@ export default async function ArenaPage() {
         </div>
       </section>
 
-      {favorites.length > 0 && (
-        <section>
-          <Reveal>
-            <SectionHeading
-              kicker="Market read"
-              title="Who the market trusts"
-              sub="Strongest favorites on the upcoming board, ranked by win probability implied by the bookmakers' odds. This is the market's opinion — the models never see it before they predict."
-              right={
-                <Link href="/fixtures" className="inline-flex items-center gap-2 border-b border-ink pb-1 text-sm font-bold uppercase text-ink hover:text-volt">
-                  Full board <ArrowRight size={15} weight="bold" />
-                </Link>
-              }
-            />
-          </Reveal>
-          <Reveal>
-            <div className="border-2 border-ink bg-surface p-5 shadow-[7px_7px_0_rgba(22,29,24,.12)] sm:p-7">
-              <MarketFavorites items={favorites} />
-            </div>
-          </Reveal>
-        </section>
-      )}
+      <section>
+        <Reveal>
+          <SectionHeading
+            kicker="Tournament pulse"
+            title="Six weeks. 104 pressure tests."
+            sub="Each column is a World Cup matchday. Height shows how many decisions the agents must make at once; tournament red takes over when knockout football begins."
+            right={
+              <Link href="/fixtures" className="inline-flex items-center gap-2 border-b border-ink pb-1 text-sm font-bold uppercase text-ink hover:text-volt">
+                Full schedule <ArrowRight size={15} weight="bold" />
+              </Link>
+            }
+          />
+        </Reveal>
+        <Reveal>
+          <TournamentPulse days={pulseDays} />
+        </Reveal>
+      </section>
 
       <section id="how" className="scroll-mt-24">
         <Reveal>

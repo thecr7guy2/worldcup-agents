@@ -1,4 +1,4 @@
-"""The five competitors — each a two-step gambler (DESIGN §2, §5).
+"""The seven competitors — each a two-step gambler (DESIGN §2, §5).
 
 Every model runs the SAME two steps over the SAME briefing; only the reasoning
 engine differs, which is what makes the leaderboard attributable to skill:
@@ -6,7 +6,7 @@ engine differs, which is what makes the leaderboard attributable to skill:
     Step 1 PREDICT (odds HIDDEN): briefing -> {winner, confidence, reasoning}
     Step 2 BET     (odds SHOWN) : + bankroll + 25% cap -> {pick, stake} or pass
 
-The system prompt (the gambler mindset induction) is identical for all five —
+The system prompt (the gambler mindset induction) is identical for all seven —
 fairness lives there. Odds are withheld until Step 2 so the football judgment is
 uninfluenced by the market. Confidence from Step 1 is the bridge into the stake.
 """
@@ -62,7 +62,7 @@ class ModelRun:
     bet: Bet | None = None
     error: str | None = None
 
-# Two system prompts, one per step — both identical across all five competitors, so the
+# Two system prompts, one per step — both identical across all seven competitors, so the
 # only variable under test stays the model (DESIGN §5 "mindset induction").
 #
 # Step 1 is a NEUTRAL forecaster: the goal is an accurate, well-calibrated read of the

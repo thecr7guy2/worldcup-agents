@@ -11,7 +11,7 @@ from typing import Any
 
 
 AGENT_META: dict[str, dict[str, Any]] = {
-    "GPT-5.5": {
+    "GPT-5.5 Pro": {
         "vendor": "OpenAI",
         "color": "#119b75",
         "sigil": "G5",

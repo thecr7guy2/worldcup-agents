@@ -37,6 +37,10 @@ from .models import (
 
 DEFAULT_DB_PATH = Path(os.environ.get("WORLDCUP_DB", "worldcup.db"))
 
+_LEGACY_MODEL_NAMES = {
+    "GPT-5.5": "GPT-5.5 Pro",
+}
+
 # "group" is a SQL keyword, hence the quoting throughout.
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS team (
@@ -239,10 +243,34 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
     """Insert each configured model at the starting bankroll, if absent."""
+    _migrate_model_names(conn)
     for spec in PREDICTION_MODELS:
         conn.execute(
             "INSERT OR IGNORE INTO competitor (model_name, bankroll) VALUES (?, ?)",
             (spec.name, STARTING_BANKROLL),
+        )
+
+
+def _migrate_model_names(conn: sqlite3.Connection) -> None:
+    """Rename configured competitors without losing predictions or bankroll history."""
+    model_tables = ("prediction", "bet", "settlement", "bankroll_history", "model_call")
+    for old, new in _LEGACY_MODEL_NAMES.items():
+        old_exists = conn.execute(
+            "SELECT 1 FROM competitor WHERE model_name = ?", (old,)
+        ).fetchone()
+        new_exists = conn.execute(
+            "SELECT 1 FROM competitor WHERE model_name = ?", (new,)
+        ).fetchone()
+        if not old_exists or new_exists:
+            continue
+        for table in model_tables:
+            conn.execute(
+                f"UPDATE {table} SET model_name = ? WHERE model_name = ?",
+                (new, old),
+            )
+        conn.execute(
+            "UPDATE competitor SET model_name = ? WHERE model_name = ?",
+            (new, old),
         )
 
 
