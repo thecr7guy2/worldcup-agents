@@ -12,18 +12,22 @@ bankroll moves only here, by `pnl`. Settlement is on the 90-minute score ONLY �
 a knockout 1–1 won on penalties settles as a DRAW (both teams' 1X2 bets lose).
 `Fixture.result_90()` is the single source of truth and ignores ET/penalties.
 
-Bust rule (DESIGN §5): if a settlement drops a competitor to/below BANKRUPT_FLOOR
-and a life remains, reset the bankroll to REBUY_AMOUNT (a "second life") and burn
-the life; with no life left, the competitor is eliminated (active=False).
+Bust rule (DESIGN §5): if settlement drops a competitor to/below BANKRUPT_FLOOR and a
+life remains, reset the bankroll to REBUY_AMOUNT (a "second life") and burn the life;
+with no life left, the competitor is eliminated (active=False). A whole matchday settles
+as ONE batch (`settle_matchday`) so this check runs once over the day's TOTAL PnL — a
+competitor can't be tipped into a re-buy by a mid-day dip a later same-day win erases,
+and the day's life-burn no longer depends on which fixture happens to settle first.
 
-Settlement is idempotent (the `settlement` PK guards re-application) and atomic
-(settlement row + competitor standing + ledger written in one transaction).
+Settlement is idempotent (the `settlement` PK guards re-application) and atomic (every
+settlement row + competitor standing + ledger entry for the batch in one transaction).
 """
 
 from __future__ import annotations
 
 import argparse
 import sqlite3
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from . import db
@@ -72,30 +76,54 @@ def grade_bet(fixture: Fixture, bet: Bet) -> tuple[BetResult, float, float]:
     return BetResult.LOSS, 0.0, -bet.stake
 
 
-def _resolve_standing(
-    comp: Competitor, pnl: float, fixture_id: int, at: datetime
-) -> tuple[Competitor, list[BankrollEntry]]:
-    """Apply PnL to a competitor and run the bust → re-buy / elimination rule. Pure.
+def _settle_competitor(
+    comp: Competitor,
+    graded: list[tuple[int, BetResult, float, float]],
+    at: datetime,
+) -> tuple[list[Settlement], Competitor, list[BankrollEntry]]:
+    """Apply a BATCH of graded bets for ONE competitor, then run the bust → re-buy /
+    elimination rule exactly ONCE on the resulting balance. Pure.
 
-    Returns the new standing plus the ledger entries to record (a `bet_settled`
-    entry for any non-zero PnL, and a `rebuy` entry when a life is spent).
+    `graded` is a list of (fixture_id, result, payout, pnl) for that competitor's
+    unsettled bets — typically every bet it placed across a single matchday. Each bet
+    still gets its own settlement row and `bet_settled` ledger entry (so per-match PnL
+    stays auditable), but the bankrupt-floor check sees only the SUMMED balance. Because
+    addition is commutative the end balance is order-free, and checking bust once means a
+    competitor can no longer be tipped into a re-buy by a mid-day dip that a later same-day
+    win would have erased — making a matchday's life-burn independent of settle order.
+
+    Returns the settlement rows, the new standing, and the ledger entries to record (a
+    `bet_settled` entry per non-zero-PnL bet, plus one `rebuy` entry if a life is spent).
     """
-    balance = comp.bankroll + pnl
+    balance = comp.bankroll
     lives_used = comp.lives_used
     active = comp.active
+    settlements: list[Settlement] = []
     ledger: list[BankrollEntry] = []
 
-    if pnl != 0:
-        ledger.append(
-            BankrollEntry(
+    for fixture_id, result, payout, pnl in graded:
+        balance += pnl
+        settlements.append(
+            Settlement(
                 model_name=comp.model_name,
-                at=at,
-                delta=pnl,
-                balance_after=balance,
-                reason="bet_settled",
                 fixture_id=fixture_id,
+                result=result,
+                payout=payout,
+                pnl=pnl,
+                settled_at=at,
             )
         )
+        if pnl != 0:
+            ledger.append(
+                BankrollEntry(
+                    model_name=comp.model_name,
+                    at=at,
+                    delta=pnl,
+                    balance_after=balance,
+                    reason="bet_settled",
+                    fixture_id=fixture_id,
+                )
+            )
 
     if balance <= BANKRUPT_FLOOR:
         if lives_used < MAX_LIVES:
@@ -109,7 +137,8 @@ def _resolve_standing(
                     delta=topup,
                     balance_after=balance,
                     reason="rebuy",
-                    fixture_id=fixture_id,
+                    # attribute the re-buy to the last bet that settled in the batch
+                    fixture_id=graded[-1][0] if graded else None,
                 )
             )
         else:
@@ -121,15 +150,56 @@ def _resolve_standing(
         lives_used=lives_used,
         active=active,
     )
-    return new, ledger
+    return settlements, new, ledger
 
 
 # ---- Orchestration -------------------------------------------------------
 
 
+def _settle_fixtures(
+    conn: sqlite3.Connection, fixtures: list[Fixture]
+) -> list[Settlement]:
+    """Grade and apply every unsettled bet across `fixtures` as ONE batch: accumulate
+    each competitor's PnL over all the fixtures, then run the bust check once per
+    competitor and commit everything atomically. Idempotent — already-settled bets are
+    returned untouched and never re-applied. The shared core of `settle_fixture` (one
+    fixture) and `settle_matchday` (a whole day)."""
+    at = _now()
+    already: list[Settlement] = []
+    # Group each competitor's still-unsettled bets, in a deterministic (fixture, model)
+    # order so the ledger is reproducible. The bust check itself is order-free.
+    by_comp: dict[str, list[tuple[int, BetResult, float, float]]] = defaultdict(list)
+    for fixture in sorted(fixtures, key=lambda f: f.id):
+        for bet in db.list_bets(conn, fixture.id):
+            existing = db.get_settlement(conn, bet.model_name, fixture.id)
+            if existing is not None:
+                already.append(existing)
+                continue
+            result, payout, pnl = grade_bet(fixture, bet)
+            by_comp[bet.model_name].append((fixture.id, result, payout, pnl))
+
+    new_settlements: list[Settlement] = []
+    updated_comps: list[Competitor] = []
+    all_ledger: list[BankrollEntry] = []
+    for model_name in sorted(by_comp):
+        comp = db.get_competitor(conn, model_name)
+        if comp is None:
+            raise ValueError(f"no competitor row for {model_name!r}")
+        settlements, new_comp, ledger = _settle_competitor(
+            comp, by_comp[model_name], at
+        )
+        new_settlements.extend(settlements)
+        updated_comps.append(new_comp)
+        all_ledger.extend(ledger)
+
+    if new_settlements:
+        db.record_settlement_batch(conn, new_settlements, updated_comps, all_ledger)
+    return already + new_settlements
+
+
 def settle_fixture(conn: sqlite3.Connection, fixture_id: int) -> list[Settlement]:
-    """Grade and apply every bet on a fixture. Idempotent: already-settled bets are
-    returned untouched (no double-application of PnL)."""
+    """Grade and apply every bet on a single fixture. Idempotent. (Manual / CLI path —
+    the live orchestrator settles a whole matchday at once via `settle_matchday`.)"""
     fixture = db.get_fixture(conn, fixture_id)
     if fixture is None:
         raise ValueError(f"no fixture with id {fixture_id}")
@@ -139,32 +209,32 @@ def settle_fixture(conn: sqlite3.Connection, fixture_id: int) -> list[Settlement
             f"`python -m worldcup_agents.settlement result {fixture_id} <home> <away>` "
             "(or `--postpone`) first"
         )
+    return _settle_fixtures(conn, [fixture])
 
-    settlements: list[Settlement] = []
-    for bet in db.list_bets(conn, fixture_id):
-        existing = db.get_settlement(conn, bet.model_name, fixture_id)
-        if existing is not None:
-            settlements.append(existing)
-            continue
 
-        result, payout, pnl = grade_bet(fixture, bet)
-        comp = db.get_competitor(conn, bet.model_name)
-        if comp is None:
-            raise ValueError(f"no competitor row for {bet.model_name!r}")
+def settle_matchday(conn: sqlite3.Connection, matchday: str) -> list[Settlement]:
+    """Grade and apply every bet across one matchday (UTC date, YYYY-MM-DD) as a single
+    batch, so each competitor's bust / re-buy check runs ONCE over the day's total PnL
+    rather than fixture-by-fixture (DESIGN §5). Idempotent.
 
-        at = _now()
-        new_comp, ledger = _resolve_standing(comp, pnl, fixture_id, at)
-        s = Settlement(
-            model_name=bet.model_name,
-            fixture_id=fixture_id,
-            result=result,
-            payout=payout,
-            pnl=pnl,
-            settled_at=at,
+    Runs at matchday CLOSE: raises if any fixture that day is still unplayed, since
+    settling early would re-introduce the very settle-order dependence this removes. A
+    fixture's bankroll impact thus lands a few hours later on busy days — an intentional
+    trade for an order-independent leaderboard."""
+    fixtures = db.fixtures_on_date(conn, matchday)
+    if not fixtures:
+        raise ValueError(f"no fixtures on {matchday}")
+    unfinished = [
+        f.id
+        for f in fixtures
+        if f.status not in (MatchStatus.FINISHED, MatchStatus.POSTPONED)
+    ]
+    if unfinished:
+        raise ValueError(
+            f"matchday {matchday} is not closed — fixtures still unplayed: {unfinished}. "
+            "Settlement runs once the day's matches are all resolved."
         )
-        db.record_settlement(conn, s, new_comp, ledger)
-        settlements.append(s)
-    return settlements
+    return _settle_fixtures(conn, fixtures)
 
 
 def record_result(
@@ -306,6 +376,19 @@ def _cmd_result(args: argparse.Namespace) -> None:
         )
 
 
+def _print_settlements(conn: sqlite3.Connection, settlements: list[Settlement]) -> None:
+    print(f"{'model':<18}{'fixture':>8}{'result':<8}{'payout':>14}{'pnl':>16}")
+    for s in sorted(settlements, key=lambda x: (x.model_name, x.fixture_id)):
+        print(
+            f"{s.model_name:<18}{s.fixture_id:>8} {s.result.value:<7}"
+            f"{s.payout:>14,.0f}{s.pnl:>+16,.0f}"
+        )
+    print(f"\n{'Bankroll standings':<18}{'bankroll':>16}{'lives':>8}{'status':>10}")
+    for c in db.list_competitors(conn):
+        status = "active" if c.active else "OUT"
+        print(f"{c.model_name:<18}{c.bankroll:>16,.0f}{c.lives_used:>8}{status:>10}")
+
+
 def _cmd_settle(args: argparse.Namespace) -> None:
     conn = db.connect()
     db.init_db(conn)
@@ -319,16 +402,15 @@ def _cmd_settle(args: argparse.Namespace) -> None:
     print(
         f"Fixture {args.fixture_id}: {home} vs {away} — settled {len(settlements)} bets\n"
     )
-    print(f"{'model':<18}{'result':<8}{'payout':>14}{'pnl':>16}")
-    for s in sorted(settlements, key=lambda x: x.model_name):
-        print(
-            f"{s.model_name:<18}{s.result.value:<8}{s.payout:>14,.0f}{s.pnl:>+16,.0f}"
-        )
+    _print_settlements(conn, settlements)
 
-    print(f"\n{'Bankroll standings':<18}{'bankroll':>16}{'lives':>8}{'status':>10}")
-    for c in db.list_competitors(conn):
-        status = "active" if c.active else "OUT"
-        print(f"{c.model_name:<18}{c.bankroll:>16,.0f}{c.lives_used:>8}{status:>10}")
+
+def _cmd_settle_day(args: argparse.Namespace) -> None:
+    conn = db.connect()
+    db.init_db(conn)
+    settlements = settle_matchday(conn, args.matchday)
+    print(f"Matchday {args.matchday} — settled {len(settlements)} bets as one batch\n")
+    _print_settlements(conn, settlements)
 
 
 def _cmd_decay(args: argparse.Namespace) -> None:
@@ -365,6 +447,13 @@ def main() -> None:
     s = sub.add_parser("settle", help="grade + apply all bets for a finished fixture")
     s.add_argument("fixture_id", type=int)
     s.set_defaults(func=_cmd_settle)
+
+    sd = sub.add_parser(
+        "settle-day",
+        help="grade + apply a whole closed matchday as one batch (bust check once)",
+    )
+    sd.add_argument("matchday", help="UTC date, YYYY-MM-DD")
+    sd.set_defaults(func=_cmd_settle_day)
 
     d = sub.add_parser("decay", help="apply idle-cash decay for a closed matchday")
     d.add_argument("matchday", help="UTC date, YYYY-MM-DD")

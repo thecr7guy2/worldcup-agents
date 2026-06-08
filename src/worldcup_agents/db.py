@@ -594,39 +594,38 @@ def get_settlement(
     return Settlement(**d)
 
 
-def record_settlement(
+def record_settlement_batch(
     conn: sqlite3.Connection,
-    settlement: Settlement,
-    competitor: Competitor,
+    settlements: list[Settlement],
+    competitors: list[Competitor],
     ledger: list[BankrollEntry],
 ) -> None:
-    """Atomically write a settlement: the settlement row, the updated competitor
-    standing, and any bankroll-ledger entries — in ONE transaction (single commit)
-    so a crash can never leave a payout half-applied."""
+    """Atomically write a batch of settlements: every settlement row, the updated
+    competitor standings, and all bankroll-ledger entries — in ONE transaction (single
+    commit) so a crash can never leave a payout half-applied or a matchday's bust check
+    partly applied. Settling a whole matchday in one call is what lets the bust / re-buy
+    rule run once per competitor, independent of the order fixtures settle in (DESIGN §5)."""
     cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO settlement "
-        "(model_name, fixture_id, result, payout, pnl, settled_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            settlement.model_name,
-            settlement.fixture_id,
-            settlement.result.value,
-            settlement.payout,
-            settlement.pnl,
-            settlement.settled_at.isoformat(),
-        ),
-    )
-    cur.execute(
-        "UPDATE competitor SET bankroll = ?, lives_used = ?, active = ? "
-        "WHERE model_name = ?",
-        (
-            competitor.bankroll,
-            competitor.lives_used,
-            int(competitor.active),
-            competitor.model_name,
-        ),
-    )
+    for s in settlements:
+        cur.execute(
+            "INSERT OR REPLACE INTO settlement "
+            "(model_name, fixture_id, result, payout, pnl, settled_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                s.model_name,
+                s.fixture_id,
+                s.result.value,
+                s.payout,
+                s.pnl,
+                s.settled_at.isoformat(),
+            ),
+        )
+    for c in competitors:
+        cur.execute(
+            "UPDATE competitor SET bankroll = ?, lives_used = ?, active = ? "
+            "WHERE model_name = ?",
+            (c.bankroll, c.lives_used, int(c.active), c.model_name),
+        )
     for e in ledger:
         cur.execute(
             "INSERT INTO bankroll_history "

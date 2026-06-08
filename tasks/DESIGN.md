@@ -176,6 +176,15 @@ correctly-seen upsets — no hand-tuned anti-favorite rules needed.
 - **Per-match stake cap:** 25% of current bankroll per market (no round-1 wipeouts).
 - **Bust:** if bankroll drops below a floor (~$10k), grant ONE smaller re-buy ($100k =
   10% of start), flagged as a "second life." Keeps all 5 in the race to the final.
+- **Settlement granularity = the matchday, not the fixture.** A whole UTC day settles as
+  one batch once all its fixtures are resolved, and the bust check runs *once* over the
+  day's total PnL. This makes the life-burn independent of the order fixtures settle in: a
+  competitor can't be tipped into a re-buy by a mid-day dip that a later same-day win would
+  have erased. (Bankroll is net-PnL — stakes are never escrowed — so the day's end balance
+  is order-free regardless; only the intermediate floor check was order-sensitive. NB: this
+  does *not* reserve stakes, so simultaneous open bets can still over-expose a bankroll —
+  a separate, heavier change if we ever want it. `settlement.settle_matchday` is the
+  enforcement point; impact lands a few hours later on busy days, a deliberate trade.)
 
 ---
 

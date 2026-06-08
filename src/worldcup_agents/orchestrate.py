@@ -63,15 +63,28 @@ def due_for_result(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     ]
 
 
-def due_for_settle(conn: sqlite3.Connection, fixtures: list[Fixture]) -> list[Fixture]:
-    """Resolved fixtures that still have at least one unsettled bet."""
-    out = []
+def due_matchdays_to_settle(
+    conn: sqlite3.Connection, fixtures: list[Fixture]
+) -> list[str]:
+    """UTC dates whose every fixture is resolved and which still carry an unsettled bet.
+    Settlement runs per-matchday (not per-fixture) so the bust / re-buy check is applied
+    once over the day's total PnL, independent of settle order (DESIGN §5)."""
+    days: dict[str, list[Fixture]] = defaultdict(list)
     for f in fixtures:
-        if f.status not in (MatchStatus.FINISHED, MatchStatus.POSTPONED):
+        days[f.kickoff.date().isoformat()].append(f)
+    out = []
+    for day, fs in sorted(days.items()):
+        resolved = all(
+            f.status in (MatchStatus.FINISHED, MatchStatus.POSTPONED) for f in fs
+        )
+        if not resolved:
             continue
-        bets = db.list_bets(conn, f.id)
-        if any(db.get_settlement(conn, b.model_name, f.id) is None for b in bets):
-            out.append(f)
+        if any(
+            db.get_settlement(conn, b.model_name, f.id) is None
+            for f in fs
+            for b in db.list_bets(conn, f.id)
+        ):
+            out.append(day)
     return out
 
 
@@ -212,13 +225,15 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
             s["errors"].append(f"result {f.id}: {e}")
     fixtures = db.list_fixtures(conn)  # refresh: some are now resolved
 
-    # 2. Settle bets on resolved fixtures.
-    for f in due_for_settle(conn, fixtures):
+    # 2. Settle bets. A matchday settles as ONE batch once all its fixtures are resolved,
+    #    so each competitor's bust / re-buy check runs once over the day's total PnL and
+    #    is independent of the order fixtures settle in (DESIGN §5). Counts matchdays.
+    for day in due_matchdays_to_settle(conn, fixtures):
         try:
-            settlement.settle_fixture(conn, f.id)
+            settlement.settle_matchday(conn, day)
             s["settled"] += 1
         except Exception as e:  # noqa: BLE001
-            s["errors"].append(f"settle {f.id}: {e}")
+            s["errors"].append(f"settle {day}: {e}")
 
     # 3. Post-match recap + dossier fold (feeds future briefings — must precede brief).
     for f in due_for_postprocess(conn, fixtures):
@@ -317,7 +332,6 @@ def _cmd_status(args: argparse.Namespace) -> None:
     fixtures = db.list_fixtures(conn)
     groups = {
         "result": due_for_result(fixtures, now),
-        "settle": due_for_settle(conn, fixtures),
         "postmatch": due_for_postprocess(conn, fixtures),
         "brief": due_for_brief(conn, fixtures, now),
         "late": due_for_late_update(conn, fixtures, now),
@@ -327,6 +341,8 @@ def _cmd_status(args: argparse.Namespace) -> None:
     for phase, fs in groups.items():
         ids = ", ".join(str(f.id) for f in fs) or "—"
         print(f"  {phase:<10} {len(fs):>3}  [{ids}]")
+    settle_days = due_matchdays_to_settle(conn, fixtures)
+    print(f"  {'settle':<10} {len(settle_days):>3}  [{', '.join(settle_days) or '—'}]")
     days = due_matchdays(conn, fixtures)
     print(f"  {'decay':<10} {len(days):>3}  [{', '.join(days) or '—'}]")
 
