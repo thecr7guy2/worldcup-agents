@@ -47,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
               <div className="grid grid-cols-2 gap-x-10 gap-y-3 text-sm font-semibold uppercase">
                 <Link href="/roster" className="text-surface/55 hover:text-volt">Agents</Link>
+                <Link href="/rules" className="text-surface/55 hover:text-volt">Rules</Link>
                 <Link href="/leaderboard" className="text-surface/55 hover:text-volt">Table</Link>
                 <Link href="/fixtures" className="text-surface/55 hover:text-volt">Matches</Link>
                 <Link href="/lab" className="text-surface/55 hover:text-volt">Compute</Link>

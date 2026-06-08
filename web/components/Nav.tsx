@@ -8,14 +8,16 @@ import {
   SoccerBall,
   Flask,
   UsersThree,
+  BookOpenText,
 } from "@phosphor-icons/react";
 
 const LINKS = [
   { href: "/", label: "Arena", short: "01", icon: HouseLine },
   { href: "/roster", label: "Agents", short: "02", icon: UsersThree },
-  { href: "/leaderboard", label: "Table", short: "03", icon: Trophy },
-  { href: "/fixtures", label: "Matches", short: "04", icon: SoccerBall },
-  { href: "/lab", label: "Compute", short: "05", icon: Flask },
+  { href: "/rules", label: "Rules", short: "03", icon: BookOpenText },
+  { href: "/leaderboard", label: "Table", short: "04", icon: Trophy },
+  { href: "/fixtures", label: "Matches", short: "05", icon: SoccerBall },
+  { href: "/lab", label: "Compute", short: "06", icon: Flask },
 ];
 
 export function Nav() {

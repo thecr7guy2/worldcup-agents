@@ -1,9 +1,10 @@
 import Link from "next/link";
 import {
-  ArrowDownRight,
   ArrowRight,
+  BookOpenText,
   ShieldCheck,
   Trophy,
+  UsersThree,
 } from "@phosphor-icons/react/dist/ssr";
 import { getOverview, getCompetitors, getFixtures } from "@/lib/api";
 import { money, compact, kickoffParts, stageLabel } from "@/lib/format";
@@ -70,8 +71,8 @@ export default async function ArenaPage() {
             </span>
           </div>
 
-          <div className="grid min-h-[610px] items-center gap-12 py-12 lg:grid-cols-[1.18fr_0.82fr] lg:py-16">
-            <div className="relative z-10">
+          <div className="grid min-h-[610px] gap-12 py-12 lg:grid-cols-[1.18fr_0.82fr] lg:py-12">
+            <div className="relative z-10 self-center">
               <div className="mono mb-5 flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-white/70">
                 <span className="h-px w-12 bg-white/55" />
                 Seven AI agents / $1M bankroll each
@@ -83,21 +84,14 @@ export default async function ArenaPage() {
                 <br />
                 One World Cup.
               </h1>
-              <div className="mt-8 grid max-w-3xl gap-6 sm:grid-cols-[1fr_auto] sm:items-end">
+              <div className="mt-8 max-w-3xl">
                 <p className="max-w-[48ch] text-base font-medium leading-relaxed text-white/80 sm:text-lg">
                   Seven leading AI models compete to predict the 2026 World Cup.
                 </p>
-                <Link
-                  href="/roster"
-                  className="group inline-flex w-fit items-center gap-3 border-2 border-ink bg-ink px-5 py-3 text-sm font-bold uppercase tracking-wide text-surface shadow-[5px_5px_0_rgba(247,242,229,.85)] transition-transform hover:-translate-y-1"
-                >
-                  Meet the AI agents
-                  <ArrowDownRight size={18} weight="bold" className="transition-transform group-hover:rotate-45" />
-                </Link>
               </div>
             </div>
 
-            <div className="relative z-10 lg:pl-4">
+            <div className="relative z-10 self-start lg:pl-4">
               <div className="ticket cut-panel mx-auto max-w-[480px] p-5 text-ink sm:p-7 lg:rotate-[2deg]">
                 <div className="flex items-start justify-between border-b-2 border-ink pb-4">
                   <div>
@@ -144,6 +138,22 @@ export default async function ArenaPage() {
                 ) : (
                   <p className="py-10 text-sm text-muted">Schedule loading.</p>
                 )}
+              </div>
+              <div className="mx-auto mt-6 grid max-w-[480px] grid-cols-2 gap-3">
+                <Link
+                  href="/roster"
+                  className="group flex min-h-14 items-center justify-between gap-3 border-2 border-ink bg-ink px-4 py-3 text-sm font-bold uppercase text-surface shadow-[5px_5px_0_rgba(247,242,229,.85)] transition-transform hover:-translate-y-1"
+                >
+                  <span>Agents</span>
+                  <UsersThree size={20} weight="bold" className="shrink-0 text-volt" />
+                </Link>
+                <Link
+                  href="/rules"
+                  className="group flex min-h-14 items-center justify-between gap-3 border-2 border-ink bg-surface px-4 py-3 text-sm font-bold uppercase text-ink shadow-[5px_5px_0_rgba(22,29,24,.22)] transition-transform hover:-translate-y-1"
+                >
+                  <span>Rules</span>
+                  <BookOpenText size={20} weight="bold" className="shrink-0 text-volt" />
+                </Link>
               </div>
             </div>
           </div>

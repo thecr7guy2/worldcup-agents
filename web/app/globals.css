@@ -103,6 +103,31 @@ body {
   transform: rotate(-8deg);
 }
 
+.rules-hero {
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(90deg, transparent 49.9%, rgba(247, 242, 229, .06) 50%, transparent 50.1%),
+    #14251d;
+}
+
+.rules-hero::before {
+  content: "PLAY FAIR / BET SMART / SURVIVE";
+  position: absolute;
+  right: -4%;
+  bottom: 4%;
+  z-index: -1;
+  width: 65%;
+  color: rgba(247, 242, 229, .045);
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 7vw, 7rem);
+  font-weight: 800;
+  line-height: .78;
+  letter-spacing: -.04em;
+  text-align: right;
+  transform: rotate(-7deg);
+}
+
 .cut-panel {
   clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
 }
