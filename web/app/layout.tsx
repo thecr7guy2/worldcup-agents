@@ -3,6 +3,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Bricolage_Grotesque } from "next/font/google";
 import Link from "next/link";
+import { Heart } from "@phosphor-icons/react/dist/ssr";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 
@@ -53,8 +54,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/lab" className="text-surface/55 hover:text-volt">Compute</Link>
               </div>
             </div>
-            <div className="mono mt-10 flex flex-wrap justify-between gap-3 border-t border-white/10 pt-4 text-[9px] uppercase tracking-[0.18em] text-surface/35">
+            <div className="mono mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4 text-[9px] uppercase tracking-[0.18em] text-surface/35">
               <span>Live competition state / read only</span>
+              <span className="flex items-center gap-1.5 text-surface/55">
+                Made with
+                <Heart size={12} weight="fill" className="text-volt" aria-label="love" />
+                by Sai
+              </span>
               <span>Odds enter after prediction</span>
             </div>
           </div>
