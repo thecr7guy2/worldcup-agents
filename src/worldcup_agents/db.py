@@ -575,6 +575,22 @@ def list_bets(conn: sqlite3.Connection, fixture_id: int) -> list[Bet]:
     return out
 
 
+def open_exposure(conn: sqlite3.Connection, model_name: str) -> tuple[float, int]:
+    """A model's CURRENTLY OPEN exposure: (total staked, match count) over its real-money
+    bets that have NOT yet settled. Surfaced in the bet step so an agent sizing a bet on
+    one of several simultaneous/same-day matches knows how much of its bankroll is already
+    committed (stakes aren't escrowed, so this is the only signal of over-exposure)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(b.stake), 0) AS staked, COUNT(*) AS n "
+        "FROM bet b "
+        "LEFT JOIN settlement s "
+        "  ON s.model_name = b.model_name AND s.fixture_id = b.fixture_id "
+        "WHERE b.model_name = ? AND b.stake > 0 AND s.model_name IS NULL",
+        (model_name,),
+    ).fetchone()
+    return float(row["staked"]), int(row["n"])
+
+
 # ---- Settlement & bankroll -----------------------------------------------
 
 

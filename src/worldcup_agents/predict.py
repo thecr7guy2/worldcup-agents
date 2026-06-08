@@ -293,6 +293,24 @@ def _odds_for(odds: OddsSnapshot, pick: Outcome) -> float:
     ]
 
 
+def _exposure_note(bankroll: float, open_stake: float, open_count: int) -> str:
+    """One line telling the agent how much of its bankroll is already committed to other
+    matches still awaiting a result, so it can size against its FREE balance instead of the
+    gross bankroll. Empty when nothing is open. Informational only — the per-match cap is
+    unchanged; we surface the exposure rather than reserve it, so simultaneous matches
+    (e.g. the final group round, both kicking off at once) get no arbitrary bet-order cap."""
+    if open_stake <= 0 or open_count <= 0:
+        return ""
+    free = max(0.0, bankroll - open_stake)
+    matches = "match" if open_count == 1 else "matches"
+    return (
+        f" NOTE: you already have ${open_stake:,.0f} staked on {open_count} other "
+        f"{matches} still awaiting a result, so your free (uncommitted) bankroll is about "
+        f"${free:,.0f}. Size this bet against that free balance — simultaneous matches "
+        f"share one bankroll, so don't over-commit across them."
+    )
+
+
 def bet(
     conn: sqlite3.Connection,
     model: ModelSpec,
@@ -312,6 +330,11 @@ def bet(
             return existing
 
     cap = bankroll * MAX_STAKE_FRACTION
+
+    # What this model has already committed to other still-unsettled matches. Surfaced (not
+    # reserved) so it can size against its free balance on busy/simultaneous matchdays.
+    open_stake, open_count = db.open_exposure(conn, model.name)
+    exposure_note = _exposure_note(bankroll, open_stake, open_count)
 
     # Show the model its OWN Step-1 distribution so it can size value against the market,
     # plus the market-implied probabilities (1/odds, margin included) for direct comparison.
@@ -353,7 +376,7 @@ A bet is profitable only when YOUR probability for that outcome beats its BREAK-
 expected value = your_probability x odds - 1 is positive. Bet ONLY on a clearly positive-EV \
 outcome; otherwise PASS (a bet that is negative-EV by your own probabilities will be \
 overridden to a pass). Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%). \
-Stake must not exceed the cap.
+Stake must not exceed the cap.{exposure_note}
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \

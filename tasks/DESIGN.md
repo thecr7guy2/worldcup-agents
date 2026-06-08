@@ -181,10 +181,20 @@ correctly-seen upsets — no hand-tuned anti-favorite rules needed.
   day's total PnL. This makes the life-burn independent of the order fixtures settle in: a
   competitor can't be tipped into a re-buy by a mid-day dip that a later same-day win would
   have erased. (Bankroll is net-PnL — stakes are never escrowed — so the day's end balance
-  is order-free regardless; only the intermediate floor check was order-sensitive. NB: this
-  does *not* reserve stakes, so simultaneous open bets can still over-expose a bankroll —
-  a separate, heavier change if we ever want it. `settlement.settle_matchday` is the
-  enforcement point; impact lands a few hours later on busy days, a deliberate trade.)
+  is order-free regardless; only the intermediate floor check was order-sensitive.
+  `settlement.settle_matchday` is the enforcement point; impact lands a few hours later on
+  busy days, a deliberate trade.)
+- **Concurrent exposure = informed, not reserved.** Stakes aren't escrowed, so on a busy
+  matchday — especially the final group round, where each group's two matches kick off
+  *simultaneously* (anti-collusion) — an agent can bet several still-unsettled matches off
+  one bankroll. Rather than reserve stakes (which would impose an arbitrary bet-order cap on
+  truly simultaneous matches), the bet step *tells* the agent its open exposure: "you have
+  $X staked on N other matches still awaiting a result, free bankroll ≈ $Y." A real bettor
+  knows its open positions; sizing against the free balance is then the agent's judgment —
+  the dimension we measure — not a mechanical limit. The per-match 25% cap is unchanged.
+  `db.open_exposure` + `predict._exposure_note` are the touchpoints. (Temporal integrity is
+  unaffected: bets lock ~0.83h before kickoff and results aren't ingested until ~2.5h after,
+  so an agent never sees a simultaneous match's result when betting its sister fixture.)
 
 ---
 
