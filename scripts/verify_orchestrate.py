@@ -14,7 +14,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from worldcup_agents import db, orchestrate
-from worldcup_agents.config import PREDICTION_MODELS
+from worldcup_agents.config import (
+    BET_LEAD_HOURS,
+    LATE_UPDATE_LEAD_HOURS,
+    PREDICTION_MODELS,
+)
 from worldcup_agents.models import (
     Bet,
     Fixture,
@@ -27,6 +31,12 @@ from worldcup_agents.models import (
 )
 
 NOW = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+
+# Offsets derived from the live window constants so this test can't go stale when they
+# are retuned. BET sits well inside the (tight) bet window; LATE sits inside the
+# late-update window, which opens where the bet window closes.
+H_BET = BET_LEAD_HOURS / 2.0
+H_LATE = (BET_LEAD_HOURS + LATE_UPDATE_LEAD_HOURS) / 2.0
 
 
 def _fx(
@@ -56,13 +66,15 @@ def main() -> None:
 
     # 600 brief-window (no briefing yet); 601 bet-window (briefing + odds); 602 result-due;
     # 603 in-progress (kicked off, before result delay); 605 far future;
-    # 606 bet-window but NO odds; 604 FINISHED on a unique past date.
+    # 606 bet-window but NO odds; 607 late-update window (briefing, no late update);
+    # 604 FINISHED on a unique past date.
     _fx(conn, 600, hours_from_now=10)
-    _fx(conn, 601, hours_from_now=1)
+    _fx(conn, 601, hours_from_now=H_BET)
     _fx(conn, 602, hours_from_now=-3)
     _fx(conn, 603, hours_from_now=-1)
     _fx(conn, 605, hours_from_now=48)
-    _fx(conn, 606, hours_from_now=1)
+    _fx(conn, 606, hours_from_now=H_BET)
+    _fx(conn, 607, hours_from_now=H_LATE)
     _fx(
         conn,
         604,
@@ -72,8 +84,9 @@ def main() -> None:
         away_goals_90=1,
     )
 
-    # Briefings + odds so 601 qualifies for betting; 606 gets a briefing but no odds.
-    for fid in (601, 606):
+    # Briefings + odds so 601 qualifies for betting; 606 gets a briefing but no odds;
+    # 607 gets a briefing and sits in the late-update window.
+    for fid in (601, 606, 607):
         db.upsert_match_briefing(
             conn, MatchBriefing(fixture_id=fid, created_at=NOW, content="briefing")
         )
@@ -95,11 +108,14 @@ def main() -> None:
     assert {f.id for f in orchestrate.due_for_result(fixtures, NOW)} == {602}, "result"
     assert {f.id for f in orchestrate.due_for_brief(conn, fixtures, NOW)} == {
         600
-    }, "brief"  # 601/606 already briefed; 605 too far; 603 kicked off
+    }, "brief"  # 601/606/607 already briefed; 605 too far; 603 kicked off
     assert {f.id for f in orchestrate.due_for_bet(conn, fixtures, NOW)} == {
         601
-    }, "bet"  # 606 excluded (no odds); 600 too early
-    print("selectors (result / brief / bet incl. odds + window gating): PASS")
+    }, "bet"  # 606 excluded (no odds); 607 still in late window; 600 too early
+    assert {f.id for f in orchestrate.due_for_late_update(conn, fixtures, NOW)} == {
+        607
+    }, "late"  # 601/606 already past the late window into the bet window
+    print("selectors (result / brief / late / bet incl. odds + window gating): PASS")
 
     # --- Settle selector: a finished fixture with an unsettled bet ---
     db.upsert_bet(
