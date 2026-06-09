@@ -43,7 +43,7 @@ class ModelSpec:
 # providers ship new versions; verify at https://openrouter.ai/models if a call
 # starts failing with an unknown-model error.
 PREDICTION_MODELS: list[ModelSpec] = [
-    ModelSpec("GPT-5.5 Pro", "openai/gpt-5.5-pro"),
+    ModelSpec("GPT 5.5", "openai/gpt-5.5"),
     ModelSpec("Opus-4.8", "anthropic/claude-opus-4.8"),
     ModelSpec("MiniMax-M3", "minimax/minimax-m3"),
     ModelSpec("Kimi-K2.6", "moonshotai/kimi-k2.6"),

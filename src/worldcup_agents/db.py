@@ -38,7 +38,8 @@ from .models import (
 DEFAULT_DB_PATH = Path(os.environ.get("WORLDCUP_DB", "worldcup.db"))
 
 _LEGACY_MODEL_NAMES = {
-    "GPT-5.5": "GPT-5.5 Pro",
+    "GPT-5.5": "GPT 5.5",
+    "GPT-5.5 Pro": "GPT 5.5",
 }
 
 # "group" is a SQL keyword, hence the quoting throughout.
