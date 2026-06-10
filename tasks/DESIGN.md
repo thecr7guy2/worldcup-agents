@@ -37,15 +37,18 @@ leaderboard attributable to model skill rather than luck-of-the-search.
   say *"I think Brazil wins."* A predicted lean in the briefing would contaminate every
   model's judgment. Intelligence agent reports; predictors decide.
 
-### Prediction Agents (5 LLMs, reasoning only — NO tools)
-All reached via OpenRouter (one key). Slugs verified when wiring the model layer.
-1. Claude (Anthropic)
-2. GPT-4o (OpenAI)
-3. DeepSeek V4   (open-weight)
-4. MiniMax M2.7  (open-weight)
-5. Kimi K2.6     (open-weight; free variant available)
+### Prediction Agents (7 LLMs, reasoning only — NO tools)
+All reached via OpenRouter (one key). `config.PREDICTION_MODELS` is the canonical lineup
+(slugs drift as providers ship new versions — edit there, not here). At kickoff 2026 it is:
+1. GPT 5.5 (OpenAI)
+2. Opus-4.8 (Anthropic)
+3. Gemini-3.1-Pro (Google)
+4. DeepSeek-V4-Pro (open-weight)
+5. MiniMax-M3 (open-weight)
+6. Kimi-K2.6 (open-weight)
+7. Qwen3.7-Max (open-weight)
 
-Each competitor is ONE agent per provider (5 total, NOT 10) that works in **two steps** —
+Each competitor is ONE agent per provider (7 total, NOT 14) that works in **two steps** —
 separating football judgment from money judgment, so the payout never biases the pick:
 
 - **Step 1 — PREDICT** (odds hidden): reads the briefing → `{winner, confidence, reasoning}`.

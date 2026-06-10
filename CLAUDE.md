@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A competition where 5 LLMs act as **virtual gamblers** predicting FIFA World Cup 2026
+A competition where 7 LLMs act as **virtual gamblers** predicting FIFA World Cup 2026
 matches. A single intelligence agent gathers facts into shared per-team dossiers; each
 competing model reasons over the *same* information and bets a $1M virtual bankroll on the
 match winner. The goal is to measure which model reasons best under uncertainty.
@@ -36,7 +36,7 @@ Data flows in one direction; the boundaries between *facts* and *judgment* are t
 ```
  Intelligence Agent (1 model, has web/tool access)
    → builds per-team DOSSIERS (facts only) → MATCH BRIEFING per fixture (NO odds)
-       → 5 Prediction Agents (reasoning only, no tools), each in TWO steps:
+       → 7 Prediction Agents (reasoning only, no tools), each in TWO steps:
             Step 1 PREDICT (odds hidden)  → {winner, confidence, reasoning}
             Step 2 BET     (odds shown)   → {pick, stake} or pass
               → Settlement vs the 90-min result → Bankroll + Accuracy leaderboards
@@ -45,7 +45,7 @@ Data flows in one direction; the boundaries between *facts* and *judgment* are t
 ### Load-bearing invariants (breaking any of these silently corrupts the competition)
 
 - **Shared knowledge base, never shared judgment.** ONE intelligence agent builds ONE set of
-  dossiers that all 5 models read identically. The only variable is the reasoning model — that
+  dossiers that all 7 models read identically. The only variable is the reasoning model — that
   is what makes the leaderboard attributable to skill, not luck-of-the-search. Do not give
   prediction agents their own tools or per-model research.
 - **Temporal integrity.** A briefing for match N may contain only information that existed
