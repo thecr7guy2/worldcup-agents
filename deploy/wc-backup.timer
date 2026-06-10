@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily DB backup at 08:00 UTC (quiet window: latest kickoffs ~02:00 UTC settle by ~05:00)
+
+[Timer]
+OnCalendar=08:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=World Cup Agents — nightly SQLite snapshot of worldcup.db into backups/
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO__
+# WorkingDirectory is load-bearing: worldcup.db and backups/ resolve relative to cwd.
+ExecStart=__UV__ run --no-sync python scripts/backup_db.py

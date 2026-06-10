@@ -28,7 +28,8 @@ RUN_USER="$(id -un)"
 UV="$(command -v uv || true)"
 [[ -z "$UV" ]] && UV="$HOME/.local/bin/uv"   # PATH is often stripped for service users
 
-UNITS=(wc-tick.service wc-tick.timer wc-odds.service wc-odds.timer)
+UNITS=(wc-tick.service wc-tick.timer wc-odds.service wc-odds.timer
+       wc-backup.service wc-backup.timer)
 
 render() {
   local dest="$1"
@@ -56,10 +57,9 @@ TARGET=/etc/systemd/system
 TMP="$(mktemp -d)"
 render "$TMP"
 echo "Installing to $TARGET ..."
-sudo cp "$TMP"/wc-tick.service "$TMP"/wc-tick.timer \
-        "$TMP"/wc-odds.service "$TMP"/wc-odds.timer "$TARGET/"
+for u in "${UNITS[@]}"; do sudo cp "$TMP/$u" "$TARGET/"; done
 sudo systemctl daemon-reload
-sudo systemctl enable --now wc-tick.timer wc-odds.timer
+sudo systemctl enable --now wc-tick.timer wc-odds.timer wc-backup.timer
 echo
 echo "Done. Verify with:"
 echo "  systemctl list-timers 'wc-*'"

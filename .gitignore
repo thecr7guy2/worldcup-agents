@@ -14,6 +14,7 @@ __pycache__/
 *.sqlite3
 data/cache/
 .cache/
+backups/
 
 # OS / editors
 .DS_Store
