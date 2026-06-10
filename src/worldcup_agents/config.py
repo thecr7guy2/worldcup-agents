@@ -112,6 +112,10 @@ LATE_UPDATE_REFRESH_MIN = 20.0
 MIN_BET_EV = 0.0
 # Wait this long after kickoff before trying to ingest a result:
 RESULT_DELAY_HOURS = 2.5
+# A 90' score is written only after this many independent web-search reads agree (a wrong
+# score corrupts settlement and both dossiers irreversibly). 1 = no confirmation; 2 = one
+# confirming read. Extra reads cost ~one cheap intelligence call per finished match.
+RESULT_CONFIRM_READS = 2
 
 
 settings = Settings()

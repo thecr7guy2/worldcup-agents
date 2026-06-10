@@ -19,7 +19,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from . import db
-from .config import INTELLIGENCE_MODEL, ModelSpec
+from .config import INTELLIGENCE_MODEL, RESULT_CONFIRM_READS, ModelSpec
 from .llm import LLMError, complete, extract_json
 from .models import Fixture, MatchStatus, Stage
 from .settlement import record_result
@@ -172,20 +172,40 @@ def ingest_result(
 
     home = _team_name(conn, fixture.home_id, fixture.home_label)
     away = _team_name(conn, fixture.away_id, fixture.away_label)
-    text, call = complete(
-        model.model_id,
-        _build_prompt(home, away, fixture),
-        model_name=model.name,
-        step="result",
-        fixture_id=fixture.id,
-        system=SYSTEM_RESULTS,
-        max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
-        temperature=0.0,  # factual extraction — deterministic
-        web_search=True,
-    )
-    db.log_model_call(conn, call)
 
-    parsed = _parse_result(extract_json(text), fixture)
+    def _one_read() -> dict:
+        text, call = complete(
+            model.model_id,
+            _build_prompt(home, away, fixture),
+            model_name=model.name,
+            step="result",
+            fixture_id=fixture.id,
+            system=SYSTEM_RESULTS,
+            max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
+            temperature=0.0,  # factual extraction — deterministic
+            web_search=True,
+        )
+        db.log_model_call(conn, call)
+        return _parse_result(extract_json(text), fixture)
+
+    parsed = _one_read()
+    if parsed["status"] == "not_finished":
+        return None  # nothing to write — no need to spend a confirming search
+
+    # A wrong score here corrupts settlement AND both dossiers irreversibly, and a
+    # web-searching LLM can mis-read a live/partial score page. So before WRITING a
+    # result, require a second independent read (fresh search) to return the identical
+    # parsed result. Disagreement aborts the write — fail loud, retry next tick.
+    if RESULT_CONFIRM_READS > 1:
+        for _ in range(RESULT_CONFIRM_READS - 1):
+            confirm = _one_read()
+            if confirm != parsed:
+                raise LLMError(
+                    f"result reads disagree for fixture {fixture.id} "
+                    f"({home} vs {away}): {parsed!r} vs {confirm!r} — "
+                    "not recording; will retry next tick"
+                )
+
     return _apply_parsed(conn, fixture, parsed)
 
 
