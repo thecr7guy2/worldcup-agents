@@ -146,6 +146,13 @@ def complete(
     reasoning = message.get("reasoning")
     if reasoning is not None and not isinstance(reasoning, str):
         reasoning = str(reasoning)
+    # Web-search calls return citation annotations (the URLs the search injected) —
+    # the audit trail of which sources informed a dossier/briefing/result.
+    annotations = message.get("annotations")
+    try:
+        annotations_json = json.dumps(annotations) if annotations else None
+    except (TypeError, ValueError):
+        annotations_json = None
 
     usage = data.get("usage") or {}
     call = ModelCall(
@@ -160,6 +167,8 @@ def complete(
         generation_id=data.get("id"),
         response_text=text or None,
         reasoning_text=reasoning or None,
+        prompt_text=prompt,
+        annotations_json=annotations_json,
         created_at=datetime.now(timezone.utc),
     )
     if not text.strip():

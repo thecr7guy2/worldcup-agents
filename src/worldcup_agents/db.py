@@ -8,6 +8,7 @@ functions are added per pipeline as we build them.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from .models import (
     Stage,
     Team,
     TeamDossier,
+    TournamentOutlook,
 )
 
 DEFAULT_DB_PATH = Path(os.environ.get("WORLDCUP_DB", "worldcup.db"))
@@ -102,6 +104,7 @@ CREATE TABLE IF NOT EXISTS prediction (
     predicted_advance TEXT,                              -- knockout only: home/away who progresses
     confidence      REAL NOT NULL,                       -- = probability of `winner`
     reasoning       TEXT NOT NULL,
+    key_factors     TEXT,                                -- JSON list of short factor tags
     created_at      TEXT NOT NULL,
     PRIMARY KEY (model_name, fixture_id)
 );
@@ -198,7 +201,22 @@ CREATE TABLE IF NOT EXISTS model_call (
     generation_id     TEXT,
     response_text     TEXT,
     reasoning_text    TEXT,
+    prompt_text       TEXT,
+    annotations_json  TEXT,
     created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tournament_outlook (
+    model_name    TEXT NOT NULL,
+    phase         TEXT NOT NULL,            -- pre | post_group | pre_final | post_final
+    asked_at      TEXT NOT NULL,
+    champion      TEXT NOT NULL,
+    runner_up     TEXT NOT NULL,
+    semifinalists TEXT NOT NULL,            -- JSON list of four teams
+    dark_horses   TEXT NOT NULL,            -- JSON list of 2-3 teams
+    golden_boot   TEXT NOT NULL,
+    worldview     TEXT NOT NULL,
+    PRIMARY KEY (model_name, phase)
 );
 """
 
@@ -244,6 +262,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "prediction", "exp_away_goals", "REAL")
     _add_column_if_missing(conn, "model_call", "response_text", "TEXT")
     _add_column_if_missing(conn, "model_call", "reasoning_text", "TEXT")
+    _add_column_if_missing(conn, "model_call", "prompt_text", "TEXT")
+    _add_column_if_missing(conn, "model_call", "annotations_json", "TEXT")
+    _add_column_if_missing(conn, "prediction", "key_factors", "TEXT")
 
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
@@ -476,8 +497,8 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
         "INSERT OR REPLACE INTO prediction "
         "(model_name, fixture_id, winner, p_home, p_draw, p_away, "
         " pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        " predicted_advance, confidence, reasoning, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " predicted_advance, confidence, reasoning, key_factors, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             p.model_name,
             p.fixture_id,
@@ -492,6 +513,7 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
             p.predicted_advance.value if p.predicted_advance else None,
             p.confidence,
             p.reasoning,
+            json.dumps(p.key_factors) if p.key_factors else None,
             p.created_at.isoformat(),
         ),
     )
@@ -502,6 +524,8 @@ def _row_to_prediction(d: dict) -> Prediction:
     d["winner"] = Outcome(d["winner"])
     if d.get("predicted_advance"):
         d["predicted_advance"] = Outcome(d["predicted_advance"])
+    if d.get("key_factors"):
+        d["key_factors"] = json.loads(d["key_factors"])
     return Prediction(**d)
 
 
@@ -512,7 +536,7 @@ def get_prediction(
     row = conn.execute(
         "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
         "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        "predicted_advance, confidence, reasoning, created_at "
+        "predicted_advance, confidence, reasoning, key_factors, created_at "
         "FROM prediction WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
     ).fetchone()
@@ -737,7 +761,7 @@ def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
     rows = conn.execute(
         "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
         "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        "predicted_advance, confidence, reasoning, created_at "
+        "predicted_advance, confidence, reasoning, key_factors, created_at "
         "FROM prediction"
     ).fetchall()
     return [_row_to_prediction(dict(row)) for row in rows]
@@ -886,8 +910,8 @@ def log_model_call(conn: sqlite3.Connection, call: ModelCall) -> None:
     conn.execute(
         "INSERT INTO model_call (model_name, step, fixture_id, prompt_tokens, "
         " completion_tokens, total_tokens, cost_usd, latency_ms, generation_id, "
-        " response_text, reasoning_text, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " response_text, reasoning_text, prompt_text, annotations_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             call.model_name,
             call.step,
@@ -900,10 +924,69 @@ def log_model_call(conn: sqlite3.Connection, call: ModelCall) -> None:
             call.generation_id,
             call.response_text,
             call.reasoning_text,
+            call.prompt_text,
+            call.annotations_json,
             call.created_at.isoformat(),
         ),
     )
     conn.commit()
+
+
+def upsert_outlook(conn: sqlite3.Connection, o: TournamentOutlook) -> None:
+    """Insert or replace one model's tournament outlook for a phase."""
+    conn.execute(
+        "INSERT OR REPLACE INTO tournament_outlook "
+        "(model_name, phase, asked_at, champion, runner_up, semifinalists, "
+        " dark_horses, golden_boot, worldview) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            o.model_name,
+            o.phase,
+            o.asked_at.isoformat(),
+            o.champion,
+            o.runner_up,
+            json.dumps(o.semifinalists),
+            json.dumps(o.dark_horses),
+            o.golden_boot,
+            o.worldview,
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_outlook(d: dict) -> TournamentOutlook:
+    d["semifinalists"] = json.loads(d["semifinalists"])
+    d["dark_horses"] = json.loads(d["dark_horses"])
+    return TournamentOutlook(**d)
+
+
+def get_outlook(
+    conn: sqlite3.Connection, model_name: str, phase: str
+) -> TournamentOutlook | None:
+    """Fetch one model's outlook for a phase, or None."""
+    row = conn.execute(
+        "SELECT model_name, phase, asked_at, champion, runner_up, semifinalists, "
+        "dark_horses, golden_boot, worldview "
+        "FROM tournament_outlook WHERE model_name = ? AND phase = ?",
+        (model_name, phase),
+    ).fetchone()
+    return _row_to_outlook(dict(row)) if row else None
+
+
+def list_outlooks(
+    conn: sqlite3.Connection, phase: str | None = None
+) -> list[TournamentOutlook]:
+    """All outlooks, optionally for one phase, ordered for stable display."""
+    sql = (
+        "SELECT model_name, phase, asked_at, champion, runner_up, semifinalists, "
+        "dark_horses, golden_boot, worldview FROM tournament_outlook"
+    )
+    params: tuple = ()
+    if phase is not None:
+        sql += " WHERE phase = ?"
+        params = (phase,)
+    sql += " ORDER BY phase, model_name"
+    return [_row_to_outlook(dict(r)) for r in conn.execute(sql, params)]
 
 
 def usage_by_model(conn: sqlite3.Connection) -> list[dict]:

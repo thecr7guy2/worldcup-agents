@@ -143,6 +143,11 @@ class Prediction(BaseModel):
     predicted_advance: Outcome | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+    # Short factor tags the model says drove the forecast (e.g. "injuries",
+    # "altitude", "rest advantage"). Optional, free-form, never blocks a forecast —
+    # feeds the report's factor-attribution analysis (which signals each model
+    # weighs, and which correlate with being right).
+    key_factors: list[str] | None = None
     created_at: datetime
 
     @property
@@ -255,6 +260,26 @@ class PostMatchReport(BaseModel):
     content: str
 
 
+class TournamentOutlook(BaseModel):
+    """One competitor's tournament-level worldview, captured at a named phase.
+
+    Asked with NO briefing, NO odds, and NO web access — pure parametric judgment.
+    Re-asked at later phases (post group stage, pre final, ...) the same questions
+    measure BELIEF REVISION over the tournament. Outlooks are report material only:
+    they are never fed back into predictions or bets (predictions stay stateless).
+    """
+
+    model_name: str
+    phase: str  # "pre" | "post_group" | "pre_final" | "post_final"
+    asked_at: datetime
+    champion: str
+    runner_up: str
+    semifinalists: list[str]  # four named teams
+    dark_horses: list[str]  # 2-3 teams expected to overperform expectations
+    golden_boot: str  # predicted top scorer (player)
+    worldview: str  # 4-8 sentences on how the model sees the tournament
+
+
 class ModelCall(BaseModel):
     """Telemetry for one LLM call, captured from the OpenRouter response usage.
 
@@ -278,4 +303,10 @@ class ModelCall(BaseModel):
     # reasoning trace — so "why did the agent do that" stays answerable post-hoc.
     response_text: str | None = None
     reasoning_text: str | None = None
+    # Full audit trail of the call's INPUT side: the exact user prompt sent (late
+    # updates make inputs time-varying, so "what exactly did the model see" must be
+    # recorded, not reconstructed) and, for web-search calls, the citation
+    # annotations OpenRouter returned (JSON) — the sources behind each briefing.
+    prompt_text: str | None = None
+    annotations_json: str | None = None
     created_at: datetime
