@@ -128,6 +128,24 @@ def _parse_score(raw: object) -> tuple[int | None, int | None]:
     return (h, a)
 
 
+def _parse_key_factors(raw: object) -> list[str] | None:
+    """Normalise the model's factor tags: short, lowercase, deduplicated strings.
+
+    Lenient — factor tags only feed the report's attribution analysis, so anything
+    that isn't a usable list of strings becomes None rather than a failed forecast.
+    """
+    if not isinstance(raw, list):
+        return None
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        tag = " ".join(item.strip().lower().split())[:60]
+        if tag and tag not in out:
+            out.append(tag)
+    return out[:8] or None
+
+
 # ---- Step 1: PREDICT (odds hidden) ---------------------------------------
 
 
@@ -185,11 +203,15 @@ expected goals for each side, and the single most-likely exact scoreline.
 Respond with ONLY a JSON object, no other text:
 {{"p_home": <0.0-1.0>, "p_draw": <0.0-1.0>, "p_away": <0.0-1.0>, \
 "expected_home_goals": <float ≥ 0>, "expected_away_goals": <float ≥ 0>, \
-"most_likely_score": "<home>-<away>", {advance_field}"reasoning": "<2-4 sentences on \
-the key factors>"}}
+"most_likely_score": "<home>-<away>", {advance_field}"key_factors": [<3-6 short \
+lowercase tags>], "reasoning": "<4-8 sentences walking through how you weighed the \
+evidence and reached this forecast>"}}
 p_home/p_draw/p_away are the probabilities of {home} winning, a draw, and {away} winning \
 after 90 minutes; calibrate them honestly. most_likely_score is the single likeliest 90' \
-scoreline — it may differ from the most probable outcome, which is fine.{advance_note}"""
+scoreline — it may differ from the most probable outcome, which is fine. key_factors \
+names the factors that actually drove your forecast, as short lowercase tags (examples: \
+"injuries", "rest advantage", "altitude", "motivation mismatch", "tactical matchup", \
+"form", "home crowd").{advance_note}"""
 
     text, call = complete(
         model.model_id,
@@ -259,6 +281,10 @@ scoreline — it may differ from the most probable outcome, which is fine.{advan
 
     reasoning = str(data.get("reasoning", "")).strip()
 
+    # Factor tags are report material (factor-attribution analysis) — optional and
+    # lenient by design: anything garbled becomes None, never a failed forecast.
+    key_factors = _parse_key_factors(data.get("key_factors"))
+
     # Kickoff guard (P1-3): a slow response can arrive after KO — never persist a prediction
     # for a match that has already started.
     if _now() >= fixture.kickoff:
@@ -278,6 +304,7 @@ scoreline — it may differ from the most probable outcome, which is fine.{advan
         predicted_advance=predicted_advance,
         confidence=confidence,
         reasoning=reasoning,
+        key_factors=key_factors,
         created_at=_now(),
     )
     db.upsert_prediction(conn, pred)
@@ -380,7 +407,7 @@ Stake must not exceed the cap.{exposure_note}
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \
-"reasoning": "<1-3 sentences>"}}"""
+"reasoning": "<2-5 sentences: where the value is (or is not), and why this stake size>"}}"""
 
     text, call = complete(
         model.model_id,
