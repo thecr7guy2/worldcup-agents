@@ -196,6 +196,8 @@ CREATE TABLE IF NOT EXISTS model_call (
     cost_usd          REAL NOT NULL DEFAULT 0,
     latency_ms        INTEGER,
     generation_id     TEXT,
+    response_text     TEXT,
+    reasoning_text    TEXT,
     created_at        TEXT NOT NULL
 );
 """
@@ -240,6 +242,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "prediction", "p_away", "REAL")
     _add_column_if_missing(conn, "prediction", "exp_home_goals", "REAL")
     _add_column_if_missing(conn, "prediction", "exp_away_goals", "REAL")
+    _add_column_if_missing(conn, "model_call", "response_text", "TEXT")
+    _add_column_if_missing(conn, "model_call", "reasoning_text", "TEXT")
 
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
@@ -881,8 +885,9 @@ def log_model_call(conn: sqlite3.Connection, call: ModelCall) -> None:
     """Record one LLM call's token/cost usage."""
     conn.execute(
         "INSERT INTO model_call (model_name, step, fixture_id, prompt_tokens, "
-        " completion_tokens, total_tokens, cost_usd, latency_ms, generation_id, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " completion_tokens, total_tokens, cost_usd, latency_ms, generation_id, "
+        " response_text, reasoning_text, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             call.model_name,
             call.step,
@@ -893,6 +898,8 @@ def log_model_call(conn: sqlite3.Connection, call: ModelCall) -> None:
             call.cost_usd,
             call.latency_ms,
             call.generation_id,
+            call.response_text,
+            call.reasoning_text,
             call.created_at.isoformat(),
         ),
     )

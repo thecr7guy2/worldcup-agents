@@ -64,7 +64,10 @@ def complete(
     system: str | None = None,
     max_tokens: int = 1024,
     temperature: float = 0.7,
-    timeout: float = 120.0,
+    # Reasoning models at effort=high routinely think for minutes before answering;
+    # 120s timed out exactly the calls we care most about (predict/bet near kickoff),
+    # and each timeout burns a retry slot inside the tight pre-kickoff window.
+    timeout: float = 300.0,
     max_retries: int = 3,
     backoff: float = 3.0,
     web_search: bool = False,
@@ -134,7 +137,15 @@ def complete(
     if not choices:
         raise LLMError(f"{model_id}: no choices in response: {str(data)[:300]}")
     finish = choices[0].get("finish_reason")
-    text = (choices[0].get("message") or {}).get("content") or ""
+    message = choices[0].get("message") or {}
+    text = message.get("content") or ""
+    # OpenRouter surfaces a model's exposed reasoning trace (when the provider returns
+    # one) as `message.reasoning`. Captured verbatim: the technical report's "why did
+    # this agent behave that way" analysis needs the full trace, not just the 2-4
+    # sentence summary the agent puts in its JSON answer.
+    reasoning = message.get("reasoning")
+    if reasoning is not None and not isinstance(reasoning, str):
+        reasoning = str(reasoning)
 
     usage = data.get("usage") or {}
     call = ModelCall(
@@ -147,6 +158,8 @@ def complete(
         cost_usd=float(usage.get("cost") or 0.0),
         latency_ms=latency_ms,
         generation_id=data.get("id"),
+        response_text=text or None,
+        reasoning_text=reasoning or None,
         created_at=datetime.now(timezone.utc),
     )
     if not text.strip():

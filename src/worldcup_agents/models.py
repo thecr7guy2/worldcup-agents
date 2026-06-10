@@ -272,4 +272,10 @@ class ModelCall(BaseModel):
     cost_usd: float = 0.0
     latency_ms: int | None = None
     generation_id: str | None = None  # OpenRouter generation id, for audit
+    # Verbatim model output, kept for the report's behavioural analysis. The parsed
+    # tables (prediction/bet) keep only the short JSON `reasoning` field; these keep
+    # everything — the full answer and, when the provider exposes it, the hidden
+    # reasoning trace — so "why did the agent do that" stays answerable post-hoc.
+    response_text: str | None = None
+    reasoning_text: str | None = None
     created_at: datetime
