@@ -284,3 +284,28 @@ orchestrator must live on the always-on box, not the dev Mac.
 - **A1 — Stake cap 25%, re-buy $100k, floor $10k** — assumed defaults, easy to tune.
 - **A2 — Intelligence agent = Claude** — assumed; swap freely.
 - **A3 — One briefing per match** (not per-agent) — core to fairness.
+
+## 12. Report instrumentation (added 2026-06-10, day before kickoff)
+
+The competition mechanics above are frozen; this section is the **measurement layer** for
+the final technical report. None of it feeds back into predictions, bets, briefings, or
+dossiers — it only records more.
+
+- **Verbatim capture per LLM call** (`model_call`): `response_text`, `reasoning_text`
+  (provider-exposed trace), `prompt_text` (late updates make inputs time-varying — record,
+  don't reconstruct), `annotations_json` (web-search citations behind each briefing/result).
+- **Factor attribution** (`prediction.key_factors`): each forecast names 3-6 short tags for
+  what drove it → per-model "what does this model weigh" charts, and factor-vs-correctness.
+- **Tournament outlooks** (`tournament_outlook`, `outlook.py`): every competitor interviewed
+  with NO briefing/odds/web at named phases (`pre`, `post_group`, `pre_final`, `post_final`):
+  champion, runner-up, semifinalists, dark horses, golden boot, worldview. Measures priors,
+  gradeable foresight, and belief revision. Write-only report data; never fed back.
+- **Near-kickoff odds refresh** (`orchestrate.odds_refresh_due` + `ingest.poll_odds`): when a
+  fixture inside the late-update horizon has missing/stale (>45 min) consensus odds, the tick
+  spends one extra Odds API credit so bets are placed into a fresh line — and the report gets
+  a true closing-line-value reference. Also self-heals fixtures the 6-hourly poll missed.
+- **Result double-read** (`RESULT_CONFIRM_READS=2`): a 90' score is written only when two
+  independent web-search reads agree — a wrong score would corrupt settlement + dossiers
+  irreversibly.
+- **Nightly DB backup** (`scripts/backup_db.py`, wc-backup.timer / cron): the .db IS the
+  experiment; snapshot daily, 21-day retention.
