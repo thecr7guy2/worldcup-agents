@@ -29,12 +29,13 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from . import bracket, db, intelligence, predict, results, settlement
+from . import bracket, db, ingest, intelligence, predict, results, settlement
 from .config import (
     BET_LEAD_HOURS,
     BRIEF_LEAD_HOURS,
     LATE_UPDATE_LEAD_HOURS,
     LATE_UPDATE_REFRESH_MIN,
+    ODDS_REFRESH_MAX_AGE_MIN,
     PREDICTION_MODELS,
     RESULT_DELAY_HOURS,
 )
@@ -151,6 +152,31 @@ def due_for_late_update(
     return out
 
 
+def odds_refresh_due(
+    conn: sqlite3.Connection, fixtures: list[Fixture], now: datetime
+) -> bool:
+    """True when any scheduled fixture inside the late-update/bet horizon has missing
+    or stale (> ODDS_REFRESH_MAX_AGE_MIN) consensus odds. One poll covers ALL events,
+    so the answer is a single bool — poll once, not per fixture. This both keeps the
+    line each bet is placed into fresh (the 6-hourly baseline poll can be hours old)
+    and self-heals a fixture whose odds the baseline poll missed."""
+    for f in fixtures:
+        if f.status != MatchStatus.SCHEDULED:
+            continue
+        h = _hours_until(f.kickoff, now)
+        if not (0 <= h <= LATE_UPDATE_LEAD_HOURS):
+            continue
+        snap = db.consensus_odds(conn, f.id)
+        if snap is None:
+            return True
+        captured = snap.captured_at
+        if captured.tzinfo is None:  # defensive: stored ISO should carry UTC
+            captured = captured.replace(tzinfo=timezone.utc)
+        if (now - captured).total_seconds() / 60.0 > ODDS_REFRESH_MAX_AGE_MIN:
+            return True
+    return False
+
+
 def due_for_bet(
     conn: sqlite3.Connection, fixtures: list[Fixture], now: datetime
 ) -> list[Fixture]:
@@ -204,6 +230,7 @@ def _new_summary() -> dict:
         "decayed": 0,
         "briefed": 0,
         "late": 0,
+        "odds_refreshed": 0,
         "predicted": 0,
         "errors": [],
     }
@@ -279,6 +306,16 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001 - best-effort; never block the pipeline
             s["errors"].append(f"late_update {f.id}: {e}")
 
+    # 7.5 Near-kickoff odds refresh (1 credit, covers all events): keep the line each bet
+    #     is placed into — and the report's closing-line reference — fresh. Best-effort;
+    #     a failed poll never blocks betting (the bet step uses the newest snapshot it has).
+    try:
+        if odds_refresh_due(conn, fixtures, now):
+            ingest.poll_odds(conn)
+            s["odds_refreshed"] = 1
+    except Exception as e:  # noqa: BLE001 - best-effort; stale odds beat no bets
+        s["errors"].append(f"odds_refresh: {e}")
+
     # 8. Predict + bet for fixtures in the (later, tighter) bet window. First refresh the
     #    late update if the early one has gone stale, so the freshest lineups inform the lock.
     for f in due_for_bet(conn, fixtures, now):
@@ -319,7 +356,7 @@ def _cmd_tick(args: argparse.Namespace) -> None:
         f"tick — results:{s['results']} settled:{s['settled']} "
         f"postmatch:{s['postprocessed']} resolved:{s['resolved']} "
         f"decay:{s['decayed']} briefed:{s['briefed']} late:{s['late']} "
-        f"predicted:{s['predicted']}"
+        f"odds:{s['odds_refreshed']} predicted:{s['predicted']}"
     )
     for err in s["errors"]:
         print(f"  ERROR {err}")

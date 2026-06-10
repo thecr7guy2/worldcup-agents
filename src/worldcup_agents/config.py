@@ -110,6 +110,12 @@ LATE_UPDATE_REFRESH_MIN = 20.0
 # that is non-positive by the model's OWN probabilities is internally inconsistent (negative
 # expected value at the offered price) and is overridden to a pass. 0.0 = require any +EV.
 MIN_BET_EV = 0.0
+# Near-kickoff odds freshness: when a fixture is inside the late-update/bet horizon and its
+# newest consensus snapshot is older than this, the tick triggers ONE targeted odds poll
+# (1 API credit, covers all events). Keeps bets from being placed into a line up to 6 hours
+# stale and gives the report a true closing-line reference. ~1-2 extra credits per kickoff
+# slot — comfortably inside the 500/mo quota next to the 6-hourly baseline poll (~120/mo).
+ODDS_REFRESH_MAX_AGE_MIN = 45.0
 # Wait this long after kickoff before trying to ingest a result:
 RESULT_DELAY_HOURS = 2.5
 # A 90' score is written only after this many independent web-search reads agree (a wrong

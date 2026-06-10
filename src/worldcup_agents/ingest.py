@@ -45,17 +45,17 @@ def cmd_seed(args: argparse.Namespace) -> None:
     print("Seed complete.")
 
 
-def cmd_odds(args: argparse.Namespace) -> None:
-    conn = connect(DEFAULT_DB_PATH)
-
+def poll_odds(conn) -> int:
+    """One Odds API poll (1 credit): fetch every event, write consensus snapshots,
+    cache odds_event_ids. Returns the number of snapshots written. Shared by the
+    scheduled `ingest odds` job and the orchestrator's near-kickoff refresh (which
+    keeps the odds each bet is placed into — and the report's closing-line metric —
+    from being up to 6 hours stale)."""
     fixtures = list_fixtures(conn)
     if not fixtures:
-        print("ERROR: no fixtures in DB — run 'seed' first.", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("no fixtures in DB — run 'seed' first")
 
-    print("Fetching odds from The Odds API...")
     events = fetch_odds()
-    print(f"Received {len(events)} events.")
 
     # Build id → canonical name for odds_event_id caching.
     id_to_name = {team_id_for(n): n for n in CANONICAL_TEAMS}
@@ -81,7 +81,6 @@ def cmd_odds(args: argparse.Namespace) -> None:
                 break
 
     snapshots = to_snapshots(events, fixtures)
-    print(f"Writing {len(snapshots)} consensus snapshots...")
     for snap in snapshots:
         upsert_odds_snapshot(conn, snap)
 
@@ -92,8 +91,19 @@ def cmd_odds(args: argparse.Namespace) -> None:
             (event_id, fixture_id),
         )
     conn.commit()
+    return len(snapshots)
 
-    print("Odds capture complete.")
+
+def cmd_odds(args: argparse.Namespace) -> None:
+    conn = connect(DEFAULT_DB_PATH)
+
+    print("Fetching odds from The Odds API...")
+    try:
+        written = poll_odds(conn)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Wrote {written} consensus snapshots. Odds capture complete.")
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
