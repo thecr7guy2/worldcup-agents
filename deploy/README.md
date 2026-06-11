@@ -186,3 +186,58 @@ uv run --no-sync python -c "from worldcup_agents import db; c=db.connect(); db.i
 **Access:** on the site, type the Konami code (↑ ↑ ↓ ↓ ← → ← → B A) to reveal `/challenger`,
 then enter the passphrase. There is no visible link. Each match is a two-step flow that mirrors
 the AIs — predict (odds hidden) then bet (odds shown). Restart `wc-api` after changing the key.
+
+## Visitor geography (public audience widget)
+
+The homepage shows a live "watching worldwide" widget — unique visitors (counted by a
+first-party `wc_vid` cookie) and the countries they tune in from. **No raw IP is ever stored**;
+only derived country/region. A once-per-session browser beacon hits the Next route handler
+`/track` (the only layer that sees the real client IP behind the public proxy), which forwards
+to the secret-gated backend `POST /api/track`.
+
+It's gated by one shared secret, set in **two** places with the **same value** (empty = ingest
+disabled, `/api/track` 404s, the widget just stays empty):
+
+```bash
+# 1. Backend (wc-api) reads the repo-root .env:
+TRACK_INGEST_KEY=<random-secret>
+# GEO_LOOKUP_URL=https://ipwho.is/{ip}   # optional; default free, no-key HTTPS endpoint
+
+# 2. The Next edge (wc-web) reads web/.env.local (gitignored), which `next start` auto-loads:
+echo 'TRACK_INGEST_KEY=<same-random-secret>' > web/.env.local
+```
+
+Two files because the two processes load env differently (pydantic reads the root `.env`; Next
+reads `web/.env*`). Keeping the web secret in `web/.env.local` avoids leaking the other API keys
+into the Node process. The `visit` table is created by the idempotent `db.init_db` — the tick
+adds it on its next run, or create it now:
+
+```bash
+uv run --no-sync python -c "from worldcup_agents import db; c=db.connect(); db.init_db(c)"
+```
+
+A web code change means a rebuild; then restart both services (the only privileged step):
+
+```bash
+cd web && npm run build && cd ..
+sudo systemctl restart wc-api wc-web
+```
+
+### Going public via Tailscale Funnel
+
+To expose the site without a router port-forward, point Tailscale **Funnel** at the Next port:
+
+```bash
+sudo tailscale funnel 3000        # publishes https://<machine>.<tailnet>.ts.net to the internet
+```
+
+The backend stays private on `127.0.0.1:8001`; only the Next server is published. Funnel sets
+`x-forwarded-for`, which `/track` reads for geolocation. **Verify once after going live** that
+visits resolve to a country — hit the Funnel URL from off-network, then:
+
+```bash
+uv run --no-sync python -c "from worldcup_agents import db; print(db.visit_summary(db.connect()))"
+```
+
+If Funnel doesn't forward a usable public IP, visits still count but show as "unidentified" —
+swap `GEO_LOOKUP_URL` or accept country-less counts.

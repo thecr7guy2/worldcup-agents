@@ -13,6 +13,7 @@ Environment=NODE_ENV=production
 # The browser sees one origin: next.config rewrites /api/* to the local uvicorn process.
 Environment=API_PROXY=http://127.0.0.1:8001
 # `next start` serves the production build (run `npm run build` at deploy first).
+# Web-only secrets (TRACK_INGEST_KEY) come from web/.env.local, which `next start` auto-loads.
 ExecStart=__NPM__ run start
 Restart=always
 RestartSec=3
