@@ -209,6 +209,41 @@ AGENT_META: dict[str, dict[str, Any]] = {
     },
 }
 
+# The secret Human Challenger gets a real character card (registered under the configured
+# challenger_name) so the eventual public reveal looks deliberate, not like an "Unknown"
+# fallback. The human still bets under the same rules — only the persona is flavour.
+from ..config import settings as _settings  # noqa: E402
+
+AGENT_META[_settings.challenger_name] = {
+    "vendor": "Human",
+    "color": "#c0392b",
+    "sigil": "YOU",
+    "emblem": "strategy",
+    "persona_name": "The Challenger",
+    "squad_number": 1,
+    "position": "Player-Manager",
+    "tagline": "Carbon, not silicon.",
+    "blurb": (
+        "The one organic mind in a league of language models — betting the same $1M "
+        "bankroll on instinct, news, and nerve, off the same clock."
+    ),
+    "play_style": "Gut read + late team-news edge",
+    "signature_move": "The Human Element",
+    "weakness": "Sleep, emotion, and overconfidence",
+    "celebration": "Quiet nod. Knew it all along.",
+    "visual_motif": "A worn matchday scarf over a tactician's notebook.",
+    "quote": "Let's see if the machines can read a game.",
+    "ratings": {
+        "VISION": 80,
+        "NERVE": 75,
+        "CHAOS": 70,
+        "VALUE": 78,
+        "MEMORY": 65,
+        "SWAG": 85,
+    },
+}
+
+
 DEFAULT_META: dict[str, Any] = {
     "vendor": "Unknown",
     "color": "#77766d",

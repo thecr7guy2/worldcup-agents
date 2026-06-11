@@ -14,18 +14,24 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..db import DEFAULT_DB_PATH
-from . import stats
+from . import challenger, stats
 
 app = FastAPI(title="LLM World Cup — The Arena", version="1.0")
 
-# Dev convenience: the Next dev server may call the API cross-origin before the
-# rewrite proxy is wired. Read-only API, so a permissive policy is harmless.
+# Dev convenience: the Next dev server may call the API cross-origin before the rewrite
+# proxy is wired. The public surface is read-only; the only writes come from the secret
+# challenger router (same-origin via the Next proxy), which authenticates each request.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+
+# The secret Human Challenger's write endpoints (gated by a passphrase; 404 when no
+# challenger key is configured). Everything below this line stays read-only.
+app.include_router(challenger.router)
 
 
 def get_conn() -> sqlite3.Connection:

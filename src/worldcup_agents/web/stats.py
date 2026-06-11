@@ -11,7 +11,12 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import db, leaderboard
-from ..config import MAX_LIVES, MAX_STAKE_FRACTION, STARTING_BANKROLL
+from ..config import (
+    CHALLENGER_PUBLIC,
+    MAX_LIVES,
+    MAX_STAKE_FRACTION,
+    STARTING_BANKROLL,
+)
 from ..models import Competitor, Fixture, MatchStatus, Team
 from . import agents_meta
 from .flags import code_for, iso_for
@@ -299,8 +304,13 @@ def competitor_card(
     }
 
 
-def _accuracy_index(conn: sqlite3.Connection) -> dict[str, dict]:
-    return {row["model"]: row for row in leaderboard.accuracy_standings(conn)}
+def _accuracy_index(
+    conn: sqlite3.Connection, *, include_human: bool = False
+) -> dict[str, dict]:
+    return {
+        row["model"]: row
+        for row in leaderboard.accuracy_standings(conn, include_human=include_human)
+    }
 
 
 def _usage_index(conn: sqlite3.Connection) -> dict[str, dict]:
@@ -317,12 +327,25 @@ def list_competitors(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
-def competitor_detail(conn: sqlite3.Connection, model_name: str) -> dict | None:
-    """One character sheet plus bankroll history and a recent bet/prediction log."""
+def competitor_detail(
+    conn: sqlite3.Connection, model_name: str, *, include_human: bool = False
+) -> dict | None:
+    """One character sheet plus bankroll history and a recent bet/prediction log.
+
+    include_human=True is used by the secret challenger's own (authenticated) view so his
+    accuracy is graded; public callers leave it False so a hidden human never surfaces.
+    """
     c = db.get_competitor(conn, model_name)
     if c is None:
         return None
-    card = competitor_card(conn, c, _accuracy_index(conn), _usage_index(conn))
+    # A hidden Human Challenger must never surface on a public (include_human=False) view,
+    # even by a direct name lookup, until CHALLENGER_PUBLIC is flipped. His own authenticated
+    # /state passes include_human=True, so this only blocks the public competitor route.
+    if not include_human and not CHALLENGER_PUBLIC and model_name in db.human_names(conn):
+        return None
+    card = competitor_card(
+        conn, c, _accuracy_index(conn, include_human=include_human), _usage_index(conn)
+    )
 
     history = [
         {
@@ -455,11 +478,13 @@ def overview(conn: sqlite3.Connection) -> dict:
         "COALESCE(SUM(cost_usd),0) AS cost_usd FROM model_call"
     ).fetchone()
     n_predictions = conn.execute("SELECT COUNT(*) FROM prediction").fetchone()[0]
+    # is_human = 0: the secret Human Challenger is excluded from the public headline numbers
+    # (competitor count + combined bankroll) just like every other public board.
     n_competitors = conn.execute(
-        "SELECT COUNT(*) FROM competitor WHERE active = 1"
+        "SELECT COUNT(*) FROM competitor WHERE active = 1 AND is_human = 0"
     ).fetchone()[0]
     total_bankroll = conn.execute(
-        "SELECT COALESCE(SUM(bankroll),0) FROM competitor"
+        "SELECT COALESCE(SUM(bankroll),0) FROM competitor WHERE is_human = 0"
     ).fetchone()[0]
 
     days_to_kickoff = None

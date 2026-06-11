@@ -31,7 +31,9 @@ def bankroll_standings(conn: sqlite3.Connection) -> list[Competitor]:
     return db.list_competitors(conn)
 
 
-def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
+def accuracy_standings(
+    conn: sqlite3.Connection, *, include_human: bool = False
+) -> list[dict]:
     """Per-model weighted accuracy over fixtures with a known 90' result.
 
     Points (DESIGN §6, graded off the PREDICT step, stakes ignored): a correct exact
@@ -47,8 +49,13 @@ def accuracy_standings(conn: sqlite3.Connection) -> list[dict]:
         for fx in db.list_fixtures(conn)
         if fx.status == MatchStatus.FINISHED and fx.result_90() is not None
     }
+    # The secret Human Challenger predicts too, but stays off the public accuracy board
+    # until revealed; his rows are still graded when include_human=True (his private view).
+    hidden = set() if include_human else db.human_names(conn)
     tally: dict[str, dict] = {}
     for p in db.list_predictions(conn):
+        if p.model_name in hidden:
+            continue
         fx = finished.get(p.fixture_id)
         if fx is None:
             continue  # no settled result for this fixture yet

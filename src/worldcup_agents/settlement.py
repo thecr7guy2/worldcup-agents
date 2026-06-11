@@ -304,7 +304,10 @@ def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEn
     at = _now()
     updated: list[Competitor] = []
     ledger: list[BankrollEntry] = []
-    for comp in db.list_competitors(conn):
+    # include_human=True: the secret Human Challenger plays by the SAME idle-decay rule as
+    # the AIs — list_competitors hides him from public boards by default, but here he must
+    # bleed un-staked cash like everyone else.
+    for comp in db.list_competitors(conn, include_human=True):
         if not comp.active:
             continue  # eliminated competitors are frozen
         idle = max(0.0, comp.bankroll - staked.get(comp.model_name, 0.0))

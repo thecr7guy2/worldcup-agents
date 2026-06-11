@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS competitor (
     model_name  TEXT PRIMARY KEY,
     bankroll    REAL NOT NULL,
     lives_used  INTEGER NOT NULL DEFAULT 0,
-    active      INTEGER NOT NULL DEFAULT 1
+    active      INTEGER NOT NULL DEFAULT 1,
+    is_human    INTEGER NOT NULL DEFAULT 0   -- 1 = the secret Human Challenger
 );
 
 CREATE TABLE IF NOT EXISTS odds_snapshot (
@@ -265,6 +266,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "model_call", "prompt_text", "TEXT")
     _add_column_if_missing(conn, "model_call", "annotations_json", "TEXT")
     _add_column_if_missing(conn, "prediction", "key_factors", "TEXT")
+    # The secret Human Challenger is just another competitor row, flagged so public board
+    # views can exclude him while the engine (settlement, decay, accuracy) treats him as a
+    # peer. Defaults to 0 so every existing AI row stays a normal competitor.
+    _add_column_if_missing(conn, "competitor", "is_human", "INTEGER NOT NULL DEFAULT 0")
 
 
 def seed_competitors(conn: sqlite3.Connection) -> None:
@@ -471,11 +476,20 @@ def get_competitor(conn: sqlite3.Connection, model_name: str) -> Competitor | No
     )
 
 
-def list_competitors(conn: sqlite3.Connection) -> list[Competitor]:
-    """Return all competitors ordered by bankroll (leaderboard order)."""
+def list_competitors(
+    conn: sqlite3.Connection, *, include_human: bool = False
+) -> list[Competitor]:
+    """Return competitors ordered by bankroll (leaderboard order).
+
+    The secret Human Challenger (is_human=1) is EXCLUDED by default, so every existing
+    public-board caller keeps showing only the AI competition. The engine paths that must
+    treat him as a peer (idle decay) pass include_human=True; settlement reaches him via
+    `get_competitor` directly and so is unaffected by this filter.
+    """
+    where = "" if include_human else "WHERE is_human = 0"
     rows = conn.execute(
-        "SELECT model_name, bankroll, lives_used, active FROM competitor "
-        "ORDER BY bankroll DESC"
+        f"SELECT model_name, bankroll, lives_used, active FROM competitor "
+        f"{where} ORDER BY bankroll DESC"
     ).fetchall()
     return [
         Competitor(
@@ -486,6 +500,29 @@ def list_competitors(conn: sqlite3.Connection) -> list[Competitor]:
         )
         for r in rows
     ]
+
+
+def human_names(conn: sqlite3.Connection) -> set[str]:
+    """The model_names flagged as human competitors — used to exclude them from public
+    accuracy/board views that iterate predictions or bets directly (not via competitor)."""
+    rows = conn.execute(
+        "SELECT model_name FROM competitor WHERE is_human = 1"
+    ).fetchall()
+    return {r["model_name"] for r in rows}
+
+
+def ensure_challenger(conn: sqlite3.Connection, name: str) -> Competitor:
+    """Create the Human Challenger's competitor row at the starting bankroll if absent,
+    flagged is_human=1. Idempotent. Returns the (possibly freshly created) standing."""
+    conn.execute(
+        "INSERT OR IGNORE INTO competitor (model_name, bankroll, is_human) "
+        "VALUES (?, ?, 1)",
+        (name, STARTING_BANKROLL),
+    )
+    conn.commit()
+    comp = get_competitor(conn, name)
+    assert comp is not None  # just inserted (or already present)
+    return comp
 
 
 # ---- Predictions & bets --------------------------------------------------

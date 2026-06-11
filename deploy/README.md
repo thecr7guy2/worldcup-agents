@@ -160,3 +160,29 @@ curl -s localhost:3000/api/overview | head # proxy + API both up
 Open `http://<server-ip>:3000` on the LAN. The API stays private on localhost; only the Next
 server is exposed. The site degrades gracefully before kickoff and fills in automatically as
 predictions, bets, results, and telemetry land — no redeploy needed for new data.
+
+## Secret: the Human Challenger
+
+A hidden 8th competitor lets a human bet alongside the AIs under the same rules (same $1M,
+25% cap, idle decay, bust/re-buy, settled on the 90' result, **bets lock ~50 min before
+kickoff** like the AIs). He is excluded from every public board until `CHALLENGER_PUBLIC` is
+flipped to `True` in `config.py` (intended for after the tournament).
+
+Enable it by setting a passphrase in `.env` (empty = feature off, all `/api/challenger/*`
+routes 404):
+
+```bash
+CHALLENGER_KEY=<your-passphrase>
+CHALLENGER_NAME=You            # optional: the human's leaderboard name
+```
+
+The `is_human` column is added automatically (idempotent migration in `db.init_db`; the tick
+applies it on its next run, or run it once now):
+
+```bash
+uv run --no-sync python -c "from worldcup_agents import db; c=db.connect(); db.init_db(c)"
+```
+
+**Access:** on the site, type the Konami code (↑ ↑ ↓ ↓ ← → ← → B A) to reveal `/challenger`,
+then enter the passphrase. There is no visible link. Each match is a two-step flow that mirrors
+the AIs — predict (odds hidden) then bet (odds shown). Restart `wc-api` after changing the key.

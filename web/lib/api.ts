@@ -240,3 +240,101 @@ export const getFixtures = (q: { day?: string; stage?: string } = {}) => {
 export const getFixture = (id: number | string) => get<FixtureDetail>(`/api/fixtures/${id}`);
 export const getToday = () => get<{ date: string; fixtures: Fixture[] }>("/api/today");
 export const getTelemetry = () => get<Telemetry>("/api/telemetry");
+
+// ---- secret Human Challenger (browser-only; same-origin so the session cookie flows) ----
+// These run client-side via the Next /api proxy, NOT through the absolute server base, so
+// the httpOnly auth cookie set by /unlock is sent on every subsequent call.
+
+export interface ChallengerOdds {
+  home: number;
+  draw: number;
+  away: number;
+  bookmaker: string;
+  captured_at: string;
+}
+
+export interface ChallengerFixture {
+  fixture_id: number;
+  stage: string;
+  group: string | null;
+  kickoff: string;
+  lock_at: string;
+  venue: string | null;
+  home: string;
+  away: string;
+  is_knockout: boolean;
+  has_odds: boolean;
+  prediction: {
+    winner: string;
+    confidence: number;
+    home_goals: number | null;
+    away_goals: number | null;
+    advances: string | null;
+  } | null;
+  odds: ChallengerOdds | null; // revealed only after a prediction exists
+  bet: { pick: string; stake: number; odds_at_bet: number | null } | null;
+}
+
+export interface ChallengerState {
+  name: string;
+  max_stake_fraction: number;
+  standing: CompetitorDetail;
+  open_fixtures: ChallengerFixture[];
+}
+
+async function cfetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`/api/challenger${path}`, {
+    ...init,
+    cache: "no-store",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (res.status === 401) throw new ChallengerLocked();
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Thrown when the session cookie is missing/invalid — the UI should show the passphrase gate. */
+export class ChallengerLocked extends Error {}
+
+export const challengerUnlock = (key: string) =>
+  cfetch<{ ok: boolean; name: string }>("/unlock", {
+    method: "POST",
+    body: JSON.stringify({ key }),
+  });
+export const challengerLogout = () =>
+  cfetch<{ ok: boolean }>("/logout", { method: "POST" });
+export const challengerState = () => cfetch<ChallengerState>("/state");
+export const challengerPredict = (body: {
+  fixture_id: number;
+  winner: string;
+  confidence: number;
+  home_goals?: number | null;
+  away_goals?: number | null;
+  advances?: string | null;
+  reasoning?: string;
+}) =>
+  cfetch<{
+    ok: boolean;
+    bankroll: number;
+    cap: number;
+    open_stake: number;
+    open_count: number;
+    odds: ChallengerOdds | null;
+  }>("/predict", { method: "POST", body: JSON.stringify(body) });
+export const challengerBet = (body: {
+  fixture_id: number;
+  pick: string;
+  stake: number;
+  reasoning?: string;
+}) =>
+  cfetch<{ ok: boolean; pick: string; stake: number; odds_at_bet: number | null; cap: number }>(
+    "/bet",
+    { method: "POST", body: JSON.stringify(body) },
+  );

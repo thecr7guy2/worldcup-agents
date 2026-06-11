@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # Every LLM is reached through OpenRouter — a single key.
     openrouter_api_key: str = ""
 
+    # The secret "Human Challenger" feature (an 8th, human competitor betting under the
+    # same rules). `challenger_key` is the passphrase that unlocks the hidden betting
+    # console — empty disables the feature entirely (no key, no writes). `challenger_name`
+    # is the human's display name / model_name in the competitor table.
+    challenger_key: str = ""
+    challenger_name: str = "You"
+
 
 # OpenRouter's OpenAI-compatible base URL.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -69,6 +76,12 @@ IDLE_DECAY = 0.005  # fraction lost on un-staked bankroll per matchday (anti-cow
 BANKRUPT_FLOOR = 10_000.0  # at/below this, the agent is bust
 REBUY_AMOUNT = 100_000.0  # a smaller "second life" granted on bust
 MAX_LIVES = 1  # number of re-buys allowed
+
+# The secret Human Challenger competes under all of the constants above. While False he is
+# hidden from every public board (he still bets, settles, and decays exactly like the AIs —
+# only his visibility is suppressed). Flip to True after the tournament to reveal his
+# standing on the public site; no other code change is needed.
+CHALLENGER_PUBLIC = False
 
 # Accuracy leaderboard scoring (DESIGN §6) — graded off the PREDICT step, stakes
 # ignored. A correct exact 90' scoreline doubles the reward of a correct outcome.
