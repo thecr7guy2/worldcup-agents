@@ -7,6 +7,7 @@ import { Heart } from "@phosphor-icons/react/dist/ssr";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 import { KonamiUnlock } from "@/components/KonamiUnlock";
+import { VisitBeacon } from "@/components/VisitBeacon";
 
 const display = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${GeistSans.variable} ${GeistMono.variable} ${display.variable}`}
     >
       <body className="grain min-h-[100dvh] antialiased">
+        <VisitBeacon />
         <KonamiUnlock />
         <Nav />
         <main className="mx-auto max-w-[1500px] px-4 pb-24 pt-8 sm:px-6">{children}</main>

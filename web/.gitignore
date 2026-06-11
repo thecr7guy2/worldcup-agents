@@ -8,3 +8,6 @@ next-env.d.ts
 .vercel
 npm-debug.log*
 .DS_Store
+
+# Local env (secrets like TRACK_INGEST_KEY) — server-only, never committed
+.env*.local

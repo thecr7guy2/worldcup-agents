@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # pick/stake/reasoning — it grants no writes and never exposes the Human Challenger.
     friend_api_key: str = ""
 
+    # Public-site visitor geography. `track_ingest_key` is a shared secret the Next edge sends
+    # with each /api/track call so the public can't forge visits; empty disables ingest (the
+    # endpoint rejects everything). `geo_lookup_url` is a `{ip}`-templated free geo-IP endpoint;
+    # only derived country/region is ever stored.
+    track_ingest_key: str = ""
+    geo_lookup_url: str = "https://ipwho.is/{ip}"
+
 
 # OpenRouter's OpenAI-compatible base URL.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import PREDICTION_MODELS, STARTING_BANKROLL
@@ -218,6 +219,18 @@ CREATE TABLE IF NOT EXISTS tournament_outlook (
     golden_boot   TEXT NOT NULL,
     worldview     TEXT NOT NULL,
     PRIMARY KEY (model_name, phase)
+);
+
+-- Public-site audience telemetry. One row per unique visitor (keyed by a first-party cookie,
+-- NOT by IP). We store only derived geography — the raw client IP is never persisted.
+CREATE TABLE IF NOT EXISTS visit (
+    visitor_id    TEXT PRIMARY KEY,          -- first-party uuid cookie = the unit of "unique"
+    country_code  TEXT,                      -- ISO-2, or NULL when geo lookup failed/unknown
+    country_name  TEXT,
+    region        TEXT,
+    is_challenger INTEGER NOT NULL DEFAULT 0, -- ever authenticated as the Human Challenger
+    first_seen    TEXT NOT NULL,
+    last_seen     TEXT NOT NULL
 );
 """
 
@@ -1034,3 +1047,59 @@ def usage_by_model(conn: sqlite3.Connection) -> list[dict]:
         "FROM model_call GROUP BY model_name ORDER BY cost_usd DESC"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---- audience telemetry (public-site visitor geography) ------------------
+
+
+def record_visit(
+    conn: sqlite3.Connection,
+    visitor_id: str,
+    *,
+    country_code: str | None = None,
+    country_name: str | None = None,
+    region: str | None = None,
+    is_challenger: bool = False,
+) -> None:
+    """Upsert one visitor keyed by their first-party cookie. First sighting inserts the geo;
+    repeat sightings only bump last_seen and can flip the challenger flag on (never off). The
+    raw IP is never stored — callers pass already-resolved geography or nothing."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO visit (visitor_id, country_code, country_name, region, "
+        " is_challenger, first_seen, last_seen) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(visitor_id) DO UPDATE SET "
+        " last_seen = excluded.last_seen, "
+        " is_challenger = MAX(visit.is_challenger, excluded.is_challenger), "
+        # Backfill geography if the first sighting couldn't resolve it.
+        " country_code = COALESCE(visit.country_code, excluded.country_code), "
+        " country_name = COALESCE(visit.country_name, excluded.country_name), "
+        " region = COALESCE(visit.region, excluded.region)",
+        (visitor_id, country_code, country_name, region, int(is_challenger), now, now),
+    )
+    conn.commit()
+
+
+def visit_summary(conn: sqlite3.Connection) -> dict:
+    """Public audience rollup: unique visitors, how many are the Challenger, and the per-country
+    breakdown (unknown geography folded into a single bucket)."""
+    total = conn.execute("SELECT COUNT(*) FROM visit").fetchone()[0]
+    challengers = conn.execute(
+        "SELECT COUNT(*) FROM visit WHERE is_challenger = 1"
+    ).fetchone()[0]
+    last_seen = conn.execute("SELECT MAX(last_seen) FROM visit").fetchone()[0]
+    countries = [
+        {"code": r["code"], "name": r["name"], "count": r["count"]}
+        for r in conn.execute(
+            "SELECT country_code AS code, "
+            " COALESCE(country_name, 'Unknown') AS name, COUNT(*) AS count "
+            "FROM visit GROUP BY country_code, country_name ORDER BY count DESC, name ASC"
+        )
+    ]
+    return {
+        "total": total,
+        "challengers": challengers,
+        "countries": countries,
+        "updated_at": last_seen,
+    }

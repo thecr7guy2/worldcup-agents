@@ -6,7 +6,7 @@ import {
   Trophy,
   UsersThree,
 } from "@phosphor-icons/react/dist/ssr";
-import { getOverview, getCompetitors, getFixtures } from "@/lib/api";
+import { getOverview, getCompetitors, getFixtures, getGeoSummary } from "@/lib/api";
 import { money, compact, kickoffParts, stageLabel } from "@/lib/format";
 import { TheField, type FieldGroup, type FieldTeam } from "@/components/TheField";
 import { Reveal } from "@/components/Reveal";
@@ -16,6 +16,7 @@ import { MatchCard } from "@/components/MatchCard";
 import { HowItWorks } from "@/components/HowItWorks";
 import { SectionHeading } from "@/components/ui";
 import { Flag } from "@/components/Flag";
+import { GeoWidget } from "@/components/GeoWidget";
 
 export default async function ArenaPage() {
   const [overview, competitors, fixtures] = await Promise.all([
@@ -23,6 +24,9 @@ export default async function ArenaPage() {
     getCompetitors(),
     getFixtures(),
   ]);
+
+  // Audience geography — defensive: a tracking hiccup must never take down the homepage.
+  const geo = await getGeoSummary().catch(() => null);
 
   const now = Date.now();
   const upcoming = fixtures
@@ -237,6 +241,21 @@ export default async function ArenaPage() {
           ))}
         </div>
       </section>
+
+      {geo && geo.total > 0 && (
+        <section>
+          <Reveal>
+            <SectionHeading
+              kicker="The gallery"
+              title="Watching worldwide"
+              sub="The Arena is open to anyone. Here's where the people following along are tuning in from."
+            />
+          </Reveal>
+          <Reveal>
+            <GeoWidget summary={geo} />
+          </Reveal>
+        </section>
+      )}
 
       <section>
         <Reveal>

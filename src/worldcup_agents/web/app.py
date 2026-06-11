@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..db import DEFAULT_DB_PATH
-from . import challenger, external, stats
+from . import challenger, external, geo, stats
 
 app = FastAPI(title="LLM World Cup — The Arena", version="1.0")
 
@@ -35,6 +35,9 @@ app.include_router(challenger.router)
 # The authenticated, read-only friend endpoint (one models locked bet; 404 when no
 # FRIEND_API_KEY is configured). Read-only, never exposes the Human Challenger.
 app.include_router(external.router)
+# Visitor-geography: a secret-gated POST /api/track (the Next edge ingests visits) plus the
+# public GET /api/geo/summary. /track writes; everything else here is read-only.
+app.include_router(geo.router)
 
 
 def get_conn() -> sqlite3.Connection:
