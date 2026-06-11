@@ -23,17 +23,24 @@ export default async function LabPage() {
   const hasData = t.totals.calls > 0;
   const maxCost = Math.max(1e-9, ...t.by_model.map((m) => m.cost_usd || 0));
 
-  // join billed compute (telemetry) with prediction accuracy (competitors)
-  const costPoints: CostPoint[] = t.by_model.map((m) => {
-    const c = competitors.find((x) => x.model === m.model_name);
-    return {
-      model: m.model_name,
-      color: m.meta.color,
-      cost: m.cost_usd,
-      hitRate: c?.accuracy.hit_rate ?? 0,
-      tokens: m.tokens,
-    };
-  });
+  // join billed compute (telemetry) with prediction accuracy (competitors). Only competitors
+  // belong on the plot — the Intelligence agent has no hit rate and its spend dwarfs the rest,
+  // which would squash all seven models into the left edge of the axis.
+  const compByName = new Map(competitors.map((c) => [c.model, c]));
+  const costPoints: CostPoint[] = t.by_model
+    .filter((m) => compByName.has(m.model_name))
+    .map((m) => {
+      const c = compByName.get(m.model_name)!;
+      return {
+        model: m.model_name,
+        color: m.meta.color,
+        cost: m.cost_usd,
+        hitRate: c.accuracy.hit_rate,
+        tokens: m.tokens,
+      };
+    });
+  // Until a match settles, every hit rate is 0 — gate the flat scatter behind a placeholder.
+  const accuracyReady = competitors.some((c) => c.accuracy.graded > 0);
 
   return (
     <div className="flex flex-col gap-12">
@@ -73,7 +80,7 @@ export default async function LabPage() {
                 bubble size is total tokens. Up-and-to-the-left is smart money.
               </p>
               <div className="border border-line-strong bg-surface p-4 shadow-[6px_6px_0_rgba(22,29,24,.12)]">
-                <CostVsAccuracy points={costPoints} />
+                <CostVsAccuracy points={costPoints} accuracyReady={accuracyReady} />
               </div>
             </section>
           </Reveal>
