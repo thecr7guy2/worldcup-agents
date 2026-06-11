@@ -1,30 +1,35 @@
-"""Authenticated, read-only "friend" endpoint — one models locked bet on a match.
+"""Authenticated, read-only "friend" API — match discovery + one models locked bet.
 
-A single GET route, gated by a shared API key (`settings.friend_api_key`). An empty key
-disables the feature entirely (the route 404s, so it stays invisible), mirroring the
-challenger. It returns ONLY a competitors final bet — pick, stake, reasoning (plus the
-match and the step-1 prediction for context) — for a given fixture, or the models most
-recent bet when no fixture is supplied.
+Two GET routes, gated by a shared key (`settings.friend_api_key`; empty key = both routes
+404, so the feature stays invisible):
 
-Read-only: it cannot write anything. The secret Human Challenger is never addressable here
-because model lookup goes through `db.list_competitors`, which excludes `is_human` rows.
+  GET /api/external/matches  — the schedule (fixture_id, date, teams) so a caller whose IDs
+                               differ from ours can index a match by DATE + TEAM NAME.
+  GET /api/external/bet      — one competitors final pick / stake / reasoning for a match,
+                               selected by fixture id OR by date + team.
+
+Our integer fixture ids are locally-minted surrogates (openfootball schedule spine), NOT a
+shared/official id, so callers must join on date + team name — hence both routes speak that
+language. Read-only; the secret Human Challenger is never addressable (model lookup goes
+through `db.list_competitors`, which excludes `is_human`).
 """
 
 from __future__ import annotations
 
 import hmac
 import sqlite3
+from datetime import timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .. import db
 from ..config import settings
+from ..models import Fixture
 
 router = APIRouter(prefix="/api/external", tags=["external"])
 
 
 def _feature_enabled() -> bool:
-    """The endpoint exists only when an API key is configured."""
     return bool(settings.friend_api_key)
 
 
@@ -46,20 +51,113 @@ def _team_name(conn: sqlite3.Connection, tid: int | None, label: str | None) -> 
     return label or "TBD"
 
 
+def _date_of(fx: Fixture) -> str:
+    """UTC calendar date of kickoff (YYYY-MM-DD) — the cross-system join key with team."""
+    return fx.kickoff.astimezone(timezone.utc).date().isoformat()
+
+
+def _fixture_brief(conn: sqlite3.Connection, fx: Fixture) -> dict:
+    return {
+        "fixture_id": fx.id,
+        "date": _date_of(fx),
+        "kickoff": fx.kickoff.isoformat(),
+        "stage": fx.stage.value,
+        "group": fx.group,
+        "home": _team_name(conn, fx.home_id, fx.home_label),
+        "away": _team_name(conn, fx.away_id, fx.away_label),
+        "status": fx.status.value,
+    }
+
+
+def _matches(
+    conn: sqlite3.Connection, *, date: str | None, team: str | None, stage: str | None
+) -> list[tuple[Fixture, dict]]:
+    """Fixtures filtered by UTC date / team-name substring / stage (any combination)."""
+    t = team.strip().lower() if team else None
+    out = []
+    for fx in db.list_fixtures(conn):
+        brief = _fixture_brief(conn, fx)
+        if date and brief["date"] != date:
+            continue
+        if stage and brief["stage"] != stage:
+            continue
+        if t and t not in brief["home"].lower() and t not in brief["away"].lower():
+            continue
+        out.append((fx, brief))
+    out.sort(key=lambda fb: fb[0].kickoff)
+    return out
+
+
+@router.get("/matches")
+def list_matches(
+    request: Request,
+    date: str | None = Query(default=None, description="UTC date YYYY-MM-DD"),
+    team: str | None = Query(default=None, description="team name (substring, case-insensitive)"),
+    stage: str | None = Query(default=None, description="group | round_of_32 | ..."),
+) -> dict:
+    """The schedule so a caller can find a match by date + team and read off its fixture_id."""
+    require_api_key(request)
+    conn = db.connect()
+    try:
+        rows = []
+        for fx, brief in _matches(conn, date=date, team=team, stage=stage):
+            n_bets = conn.execute(
+                "SELECT COUNT(*) FROM bet b JOIN competitor c ON c.model_name = b.model_name "
+                "WHERE b.fixture_id = ? AND c.is_human = 0",
+                (fx.id,),
+            ).fetchone()[0]
+            brief["bets_available"] = n_bets > 0
+            rows.append(brief)
+        return {"count": len(rows), "matches": rows}
+    finally:
+        conn.close()
+
+
+def _resolve_fixture(
+    conn: sqlite3.Connection, fixture: int | None, date: str | None, team: str | None
+) -> Fixture:
+    """Pick exactly one fixture from an id, or from date+team. Ambiguity is a 409 that lists
+    the candidates so the caller can narrow with a date or the explicit fixture_id."""
+    if fixture is not None:
+        fx = db.get_fixture(conn, fixture)
+        if fx is None:
+            raise HTTPException(status_code=404, detail=f"No fixture {fixture}")
+        return fx
+    if not date and not team:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide fixture, or date and/or team, to identify a match.",
+        )
+    cands = _matches(conn, date=date, team=team, stage=None)
+    if not cands:
+        raise HTTPException(
+            status_code=404, detail="No match found for those date/team filters."
+        )
+    if len(cands) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Multiple matches — narrow with a date (and team).",
+                "candidates": [b for _, b in cands],
+            },
+        )
+    return cands[0][0]
+
+
 @router.get("/bet")
 def model_bet(
     request: Request,
     model: str = Query(..., description="competitor / LLM display name (case-insensitive)"),
-    fixture: int | None = Query(
-        default=None, description="fixture id; omit for the models most recent bet"
-    ),
+    fixture: int | None = Query(default=None, description="our fixture id (optional)"),
+    date: str | None = Query(default=None, description="UTC date YYYY-MM-DD"),
+    team: str | None = Query(default=None, description="a team in the match (substring)"),
 ) -> dict:
-    """Return one models final bet: pick, stake, reasoning (+ match and step-1 prediction)."""
+    """One models final bet: pick, stake, reasoning, plus date + teams so the match is
+    identifiable without our internal id. Select by fixture id, by date+team, or omit all
+    to get the models most recent bet."""
     require_api_key(request)
     conn = db.connect()
     try:
-        # Resolve the model case-insensitively. list_competitors excludes the secret human,
-        # so the Human Challenger can never be addressed through this endpoint.
         comp = next(
             (
                 c
@@ -72,16 +170,9 @@ def model_bet(
             raise HTTPException(status_code=404, detail=f"Unknown model {model!r}")
         name = comp.model_name
 
-        if fixture is not None:
-            fixture_id = fixture
-            bet = db.get_bet(conn, name, fixture_id)
-            if bet is None:
-                raise HTTPException(
-                    status_code=404, detail=f"No bet from {name} on fixture {fixture_id}"
-                )
-        else:
-            # Bets lock ~50 min before kickoff and are placed in kickoff order, so the most
-            # recently created bet is this models pick for the nearest match.
+        if fixture is None and not date and not team:
+            # No selector: the models most recent bet (bets lock ~50 min pre-kickoff in
+            # kickoff order, so the newest is the nearest match).
             row = conn.execute(
                 "SELECT fixture_id FROM bet WHERE model_name = ? "
                 "ORDER BY created_at DESC LIMIT 1",
@@ -91,22 +182,24 @@ def model_bet(
                 raise HTTPException(
                     status_code=404, detail=f"{name} has not placed any bets yet"
                 )
-            fixture_id = row["fixture_id"]
-            bet = db.get_bet(conn, name, fixture_id)
+            fx = db.get_fixture(conn, row["fixture_id"])
+        else:
+            fx = _resolve_fixture(conn, fixture, date, team)
 
-        fx = db.get_fixture(conn, fixture_id)
-        pred = db.get_prediction(conn, name, fixture_id)
-        match = (
-            f"{_team_name(conn, fx.home_id, fx.home_label)} vs "
-            f"{_team_name(conn, fx.away_id, fx.away_label)}"
-            if fx
-            else None
-        )
+        bet = db.get_bet(conn, name, fx.id)
+        if bet is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{name} has no bet on {_date_of(fx)} "
+                f"{_team_name(conn, fx.home_id, fx.home_label)} vs "
+                f"{_team_name(conn, fx.away_id, fx.away_label)} (bets lock ~50 min pre-kickoff).",
+            )
+        pred = db.get_prediction(conn, name, fx.id)
+        brief = _fixture_brief(conn, fx)
         return {
             "model": name,
-            "fixture_id": fixture_id,
-            "match": match,
-            "kickoff": fx.kickoff.isoformat() if fx else None,
+            **brief,
+            "match": f'{brief["home"]} vs {brief["away"]}',
             "predicted_winner": pred.winner.value if pred else None,
             "confidence": pred.confidence if pred else None,
             "pick": bet.pick.value if bet.pick else "pass",
