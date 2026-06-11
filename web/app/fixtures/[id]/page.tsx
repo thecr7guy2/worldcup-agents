@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Target, MapPin, Brain, CaretDown } from "@phosphor-icons/react/dist/ssr";
+import { ArrowLeft, Target, MapPin, Brain, CaretDown, FileText } from "@phosphor-icons/react/dist/ssr";
 import { getFixture } from "@/lib/api";
 import type { BoardEntry, TeamSide } from "@/lib/api";
 import { money, pct, signedMoney, stageLabel, kickoffParts, outcomeLabel } from "@/lib/format";
@@ -9,6 +9,7 @@ import { Empty } from "@/components/Empty";
 import { Reveal } from "@/components/Reveal";
 import { MarketBar } from "@/components/MarketBar";
 import { Disagreement } from "@/components/Disagreement";
+import { Briefing } from "@/components/Briefing";
 
 export default async function FixturePage({
   params,
@@ -85,6 +86,32 @@ export default async function FixturePage({
             the board below once predictions lock.
           </p>
         </section>
+      )}
+
+      {/* the briefing — the neutral, odds-free dossier every model reasoned from. Collapsed by
+          default so it never crowds the page; native <details> keeps it server-rendered. */}
+      {f.briefing && (
+        <details className="group border-2 border-ink bg-surface shadow-[6px_6px_0_rgba(22,29,24,.12)] [&_summary::-webkit-details-marker]:hidden">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 sm:p-6">
+            <span className="flex items-center gap-2.5">
+              <FileText size={20} weight="bold" className="text-volt" />
+              <span>
+                <span className="block font-display text-lg font-bold text-ink">The briefing</span>
+                <span className="mono block text-[10px] uppercase tracking-[0.14em] text-faint">
+                  The exact facts every model saw · no odds, no lean
+                </span>
+              </span>
+            </span>
+            <span className="mono flex shrink-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted group-hover:text-volt">
+              <span className="hidden sm:inline group-open:hidden">Read</span>
+              <span className="hidden sm:group-open:inline">Close</span>
+              <CaretDown size={16} weight="bold" className="transition-transform group-open:rotate-180" />
+            </span>
+          </summary>
+          <div className="border-t border-line px-5 pb-6 pt-4 sm:px-6">
+            <Briefing content={f.briefing} />
+          </div>
+        </details>
       )}
 
       {/* the board */}

@@ -132,7 +132,12 @@ def fixture_detail(conn: sqlite3.Connection, fixture_id: int) -> dict | None:
         return None
     teams = _team_index(conn)
     base = serialize_fixture(fx, teams, _consensus_odds_dict(conn, fixture_id))
-    base["briefed"] = db.get_match_briefing(conn, fixture_id) is not None
+    # The match briefing is the neutral, odds-free dossier every model reads. Surface its
+    # markdown to the site (safe to show whenever it exists — no odds, no lean), and keep the
+    # `briefed` flag derived from the same fetch so the two never disagree.
+    mb = db.get_match_briefing(conn, fixture_id)
+    base["briefed"] = mb is not None
+    base["briefing"] = mb.content if mb else None
 
     # Per-model board: prediction (step 1), bet (step 2), settlement.
     preds = {

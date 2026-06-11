@@ -200,6 +200,7 @@ export interface BoardEntry {
 
 export interface FixtureDetail extends Fixture {
   briefed: boolean;
+  briefing: string | null;
   board: BoardEntry[];
 }
 
@@ -240,6 +241,14 @@ export const getFixtures = (q: { day?: string; stage?: string } = {}) => {
 export const getFixture = (id: number | string) => get<FixtureDetail>(`/api/fixtures/${id}`);
 export const getToday = () => get<{ date: string; fixtures: Fixture[] }>("/api/today");
 export const getTelemetry = () => get<Telemetry>("/api/telemetry");
+
+// ---- audience geography (public visitor widget) --------------------------
+export interface GeoSummary {
+  total: number;
+  countries: Array<{ code: string | null; name: string; count: number }>;
+  updated_at: string | null;
+}
+export const getGeoSummary = () => get<GeoSummary>("/api/geo/summary");
 
 // ---- secret Human Challenger (browser-only; same-origin so the session cookie flows) ----
 // These run client-side via the Next /api proxy, NOT through the absolute server base, so
