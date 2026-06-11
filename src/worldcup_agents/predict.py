@@ -101,6 +101,9 @@ no edge.
 every match bleeds money to the margin.
 - Stake size should scale with the size of your edge and your conviction, never exceeding \
 the per-match cap.
+- Explain every bet like a sharp football pundit, not a spreadsheet: ground your read of the \
+result in the match itself — form, key matchups, tactics, team news, motivation — and put the \
+price judgment in plain words. Skip the jargon (no "Kelly", no "EV", no bare percentages).
 - You are measured on results, not eloquence. Be decisive."""
 
 
@@ -407,7 +410,10 @@ Stake must not exceed the cap.{exposure_note}
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \
-"reasoning": "<2-5 sentences: where the value is (or is not), and why this stake size>"}}"""
+"reasoning": "<2-5 sentences a football fan would enjoy: tell the match story (form, key \
+matchups, tactics, team news) and why it makes your pick more or less likely than the price \
+suggests, then the value in plain words and why this stake. Lead with the football — no jargon \
+like Kelly, EV, or bare percentages>"}}"""
 
     text, call = complete(
         model.model_id,
