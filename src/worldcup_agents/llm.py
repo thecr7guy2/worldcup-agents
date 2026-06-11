@@ -130,15 +130,43 @@ def complete(
             continue
         if resp.status_code != 200:
             raise LLMError(f"{model_id}: HTTP {resp.status_code}: {resp.text[:300]}")
-        break
 
-    data = resp.json()
-    choices = data.get("choices")
-    if not choices:
-        raise LLMError(f"{model_id}: no choices in response: {str(data)[:300]}")
-    finish = choices[0].get("finish_reason")
-    message = choices[0].get("message") or {}
-    text = message.get("content") or ""
+        # A 200 whose body is not parseable JSON is a transient provider/transport artifact
+        # (observed: a malformed/partial body on deepseek-v4-pro that surfaced as a raw
+        # JSONDecodeError and crashed the predict step with no retry). Treat it like a 5xx.
+        try:
+            data = resp.json()
+        except ValueError as e:
+            last_err = f"unparseable 200 body: {e}"
+            if attempt < max_retries:
+                time.sleep(backoff * (attempt + 1))
+                continue
+            raise LLMError(f"{model_id}: {last_err}") from e
+        choices = data.get("choices")
+        finish = choices[0].get("finish_reason") if choices else None
+        message = (choices[0].get("message") or {}) if choices else {}
+        text = message.get("content") or ""
+
+        # OpenRouter returns HTTP 200 with finish_reason="error" (or no choices at all)
+        # when the UPSTREAM provider errors mid-generation — observed as a transient Baidu
+        # hiccup on deepseek-v4-pro that the model otherwise handles fine. The status-code
+        # retry above never sees these (they are 200s), so a briefing died on a blip with no
+        # retry. Treat a provider error / missing choices / an empty answer that did NOT
+        # merely hit the token cap as transient and retry; a real finish_reason="length"
+        # still falls through to the max_tokens hint below.
+        provider_failed = (
+            not choices
+            or finish == "error"
+            or (not text.strip() and finish != "length")
+        )
+        if provider_failed and attempt < max_retries:
+            err = (choices[0].get("error") if choices else None) or data.get("error")
+            last_err = f"finish_reason={finish}; {str(err)[:200]}"
+            time.sleep(backoff * (attempt + 1))
+            continue
+        if not choices:
+            raise LLMError(f"{model_id}: no choices in response: {str(data)[:300]}")
+        break
     # OpenRouter surfaces a model's exposed reasoning trace (when the provider returns
     # one) as `message.reasoning`. Captured verbatim: the technical report's "why did
     # this agent behave that way" analysis needs the full trace, not just the 2-4
