@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     challenger_key: str = ""
     challenger_name: str = "You"
 
+    # Shared API key for the read-only "friend" bet endpoint (/api/external/bet). Empty
+    # disables the route entirely (404). Anyone with this key can read any models locked
+    # pick/stake/reasoning — it grants no writes and never exposes the Human Challenger.
+    friend_api_key: str = ""
+
 
 # OpenRouter's OpenAI-compatible base URL.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"

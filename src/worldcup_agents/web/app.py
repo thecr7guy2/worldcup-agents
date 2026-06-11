@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..db import DEFAULT_DB_PATH
-from . import challenger, stats
+from . import challenger, external, stats
 
 app = FastAPI(title="LLM World Cup — The Arena", version="1.0")
 
@@ -32,6 +32,9 @@ app.add_middleware(
 # The secret Human Challenger's write endpoints (gated by a passphrase; 404 when no
 # challenger key is configured). Everything below this line stays read-only.
 app.include_router(challenger.router)
+# The authenticated, read-only friend endpoint (one models locked bet; 404 when no
+# FRIEND_API_KEY is configured). Read-only, never exposes the Human Challenger.
+app.include_router(external.router)
 
 
 def get_conn() -> sqlite3.Connection:
