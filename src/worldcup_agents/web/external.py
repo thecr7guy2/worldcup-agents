@@ -209,3 +209,39 @@ def model_bet(
         }
     finally:
         conn.close()
+
+
+# A canned sample in the EXACT shape of a /bet response, so a caller can build and test
+# their parser before any real bet exists (bets lock ~50 min pre-kickoff). Clearly flagged
+# example=True and served from a constant — it touches no competition data.
+_EXAMPLE_BET = {
+    "example": True,
+    "note": "Sample only — identical shape to GET /api/external/bet. Not a real bet.",
+    "model": "MiniMax-M3",
+    "fixture_id": 9999,
+    "date": "2026-06-11",
+    "kickoff": "2026-06-11T19:00:00+00:00",
+    "stage": "group",
+    "group": "C",
+    "home": "Brazil",
+    "away": "Morocco",
+    "status": "scheduled",
+    "match": "Brazil vs Morocco",
+    "predicted_winner": "home",
+    "confidence": 0.42,
+    "pick": "away",
+    "stake": 80000.0,
+    "odds_at_bet": 5.5,
+    "reasoning": (
+        "The market overrates Brazil (fair 58% vs my 42%) and underrates Morocco "
+        "(fair 17% vs my 28%). Morocco at 5.5 is +EV (0.28 x 5.5 - 1 = +54%), so I back "
+        "the underdog for value despite predicting a Brazil win."
+    ),
+}
+
+
+@router.get("/example")
+def example(request: Request) -> dict:
+    """Return a canned sample bet (same shape as /bet) for integration/parser testing."""
+    require_api_key(request)
+    return dict(_EXAMPLE_BET)
