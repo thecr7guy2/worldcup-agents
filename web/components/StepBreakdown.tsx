@@ -57,8 +57,11 @@ export function StepBreakdown({ rows }: { rows: StepRow[] }) {
             height={48}
           />
           <YAxis
-            tickFormatter={(v) => `$${v.toFixed(0)}`}
-            width={48}
+            // Spend is sub-dollar (cents of token cost), so whole-dollar ticks render
+            // every gridline as "$0". Cent precision shows the real scale and still reads
+            // as money once a model's cumulative cost climbs past $1 later in the run.
+            tickFormatter={(v) => `$${Number(v).toFixed(2)}`}
+            width={56}
             tick={{ fill: "var(--color-faint)", fontSize: 11, fontFamily: "var(--font-mono)" }}
             axisLine={false}
             tickLine={false}
