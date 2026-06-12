@@ -64,28 +64,26 @@ def due_for_result(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     ]
 
 
-def due_matchdays_to_settle(
+def due_fixtures_to_settle(
     conn: sqlite3.Connection, fixtures: list[Fixture]
-) -> list[str]:
-    """UTC dates whose every fixture is resolved and which still carry an unsettled bet.
-    Settlement runs per-matchday (not per-fixture) so the bust / re-buy check is applied
-    once over the day's total PnL, independent of settle order (DESIGN §5)."""
-    days: dict[str, list[Fixture]] = defaultdict(list)
-    for f in fixtures:
-        days[f.kickoff.date().isoformat()].append(f)
+) -> list[Fixture]:
+    """Resolved fixtures (finished / postponed) that still carry an unsettled bet.
+
+    Settlement is per-fixture: a match's bets settle the moment IT resolves, so the
+    leaderboard reflects each result immediately. The previous per-UTC-day batch stranded
+    late-night kickoffs — a match at e.g. 02:00 UTC shares its calendar day with that
+    evening's still-unplayed games, so its bets couldn't settle until ~24h later. The
+    trade-off: the bust / re-buy check now runs per fixture rather than once over a day's
+    total PnL, so same-day settle order can influence a re-buy (accepted; DESIGN §5)."""
     out = []
-    for day, fs in sorted(days.items()):
-        resolved = all(
-            f.status in (MatchStatus.FINISHED, MatchStatus.POSTPONED) for f in fs
-        )
-        if not resolved:
+    for f in fixtures:
+        if f.status not in (MatchStatus.FINISHED, MatchStatus.POSTPONED):
             continue
         if any(
             db.get_settlement(conn, b.model_name, f.id) is None
-            for f in fs
             for b in db.list_bets(conn, f.id)
         ):
-            out.append(day)
+            out.append(f)
     return out
 
 
@@ -252,15 +250,16 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
             s["errors"].append(f"result {f.id}: {e}")
     fixtures = db.list_fixtures(conn)  # refresh: some are now resolved
 
-    # 2. Settle bets. A matchday settles as ONE batch once all its fixtures are resolved,
-    #    so each competitor's bust / re-buy check runs once over the day's total PnL and
-    #    is independent of the order fixtures settle in (DESIGN §5). Counts matchdays.
-    for day in due_matchdays_to_settle(conn, fixtures):
+    # 2. Settle bets per fixture: a match's bets settle as soon as it resolves, so the
+    #    leaderboard reflects each result immediately instead of waiting for the rest of
+    #    the UTC calendar day (which stranded late-night, cross-midnight kickoffs). The
+    #    bust / re-buy check is therefore per fixture, not once over a day's PnL (§5).
+    for f in due_fixtures_to_settle(conn, fixtures):
         try:
-            settlement.settle_matchday(conn, day)
+            settlement.settle_fixture(conn, f.id)
             s["settled"] += 1
         except Exception as e:  # noqa: BLE001
-            s["errors"].append(f"settle {day}: {e}")
+            s["errors"].append(f"settle {f.id}: {e}")
 
     # 3. Post-match recap + dossier fold (feeds future briefings — must precede brief).
     for f in due_for_postprocess(conn, fixtures):
@@ -378,8 +377,9 @@ def _cmd_status(args: argparse.Namespace) -> None:
     for phase, fs in groups.items():
         ids = ", ".join(str(f.id) for f in fs) or "—"
         print(f"  {phase:<10} {len(fs):>3}  [{ids}]")
-    settle_days = due_matchdays_to_settle(conn, fixtures)
-    print(f"  {'settle':<10} {len(settle_days):>3}  [{', '.join(settle_days) or '—'}]")
+    settle_fx = due_fixtures_to_settle(conn, fixtures)
+    settle_ids = ", ".join(str(f.id) for f in settle_fx) or "—"
+    print(f"  {'settle':<10} {len(settle_fx):>3}  [{settle_ids}]")
     days = due_matchdays(conn, fixtures)
     print(f"  {'decay':<10} {len(days):>3}  [{', '.join(days) or '—'}]")
 

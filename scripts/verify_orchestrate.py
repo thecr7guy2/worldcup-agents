@@ -129,14 +129,15 @@ def main() -> None:
             created_at=NOW,
         ),
     )
-    # 604 is the only fixture on 2026-06-18, so that matchday is fully resolved and due.
+    # 604 is finished with an unsettled bet, so it is due to settle on its own (per-fixture,
+    # no longer gated on the rest of its UTC calendar day being resolved).
     fixtures = db.list_fixtures(conn)
-    assert "2026-06-18" in orchestrate.due_matchdays_to_settle(conn, fixtures)
+    assert 604 in {f.id for f in orchestrate.due_fixtures_to_settle(conn, fixtures)}
     from worldcup_agents import settlement
 
-    settlement.settle_matchday(conn, "2026-06-18")
-    assert "2026-06-18" not in orchestrate.due_matchdays_to_settle(conn, fixtures)
-    print("settle selector (matchday unsettled -> settled excluded): PASS")
+    settlement.settle_fixture(conn, 604)
+    assert 604 not in {f.id for f in orchestrate.due_fixtures_to_settle(conn, fixtures)}
+    print("settle selector (fixture unsettled -> settled excluded): PASS")
 
     # --- Post-process selector + dossier-fold marker ---
     assert 604 in {f.id for f in orchestrate.due_for_postprocess(conn, fixtures)}
