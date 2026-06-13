@@ -78,3 +78,14 @@ Failure modes discovered, the signal that caught them, and the prevention rule.
 - **Prevention rule:** for a reasoning model, `max_tokens` must cover reasoning PLUS the answer;
   a cap sized for the answer alone starves the output. Set ceilings generously (billed on use,
   not on the cap) and match them across call sites. `llm.py` already warned about exactly this.
+
+## 2026-06-13 — ad-hoc SQL vs ISO timestamps
+- **Failure mode:** ad-hoc query `WHERE kickoff < datetime('now')` silently excluded
+  same-day fixtures — kickoffs are stored ISO-8601 with a `T` separator, while
+  `datetime('now')` yields a space separator, and TEXT comparison puts `'T' > ' '`.
+  Led to a false "results ingestion is stuck" diagnosis (the pipeline was healthy).
+- **Detection signal:** a query result that contradicts a healthy-looking journal
+  (ticks succeeding) — trust the logs, re-check the query.
+- **Prevention:** in ad-hoc sqlite queries against this DB, compare via
+  `datetime(kickoff) < datetime('now')` (normalises both sides), and check
+  `journalctl -u wc-tick` before concluding any pipeline stage is stuck.

@@ -131,10 +131,12 @@ PREDICT_MAX_WORKERS = 6
 # Refresh a cached late update at predict time if it is older than this many minutes, so
 # confirmed lineups that landed since the first (~T-75) fetch are picked up before the lock.
 LATE_UPDATE_REFRESH_MIN = 20.0
-# Minimum expected value for a bet to stand: EV = model_prob(pick) * decimal_odds - 1. A bet
-# that is non-positive by the model's OWN probabilities is internally inconsistent (negative
-# expected value at the offered price) and is overridden to a pass. 0.0 = require any +EV.
-MIN_BET_EV = 0.0
+# Minimum expected value for a bet to stand: EV = p_revised(pick) * decimal_odds - 1,
+# judged at the model's REVISED (post-market-reconciliation) probability — falling back to
+# its Step-1 probability when no revised number was given. A bet below this edge is
+# overridden to a pass. Set above zero so a bet needs a CLEAR edge after weighing the
+# market, not a rounding artifact of a flat blind forecast.
+MIN_BET_EV = 0.05
 # Near-kickoff odds freshness: when a fixture is inside the late-update/bet horizon and its
 # newest consensus snapshot is older than this, the tick triggers ONE targeted odds poll
 # (1 API credit, covers all events). Keeps bets from being placed into a line up to 6 hours

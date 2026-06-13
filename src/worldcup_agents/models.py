@@ -168,6 +168,12 @@ class Bet(BaseModel):
     # A stake is real money: never negative, never NaN/inf (which JSON parsing lets through).
     stake: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     odds_at_bet: float | None = None  # decimal odds for the pick at bet time
+    # The model's REVISED probability that its pick wins, stated at the bet step after
+    # reconciling its blind Step-1 forecast with the market price. The negative-EV guard
+    # runs on this number (the Step-1 distribution stays a pure pre-market artifact);
+    # storing both sides lets the report measure each model's market-update behaviour.
+    # None on passes, human-challenger bets, and rows from before the field existed.
+    p_revised: float | None = Field(default=None, ge=0.0, le=1.0)
     reasoning: str = ""
     created_at: datetime
 

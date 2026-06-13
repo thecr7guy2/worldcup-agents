@@ -54,11 +54,26 @@ separating football judgment from money judgment, so the payout never biases the
 - **Step 1 — PREDICT** (odds hidden): reads the briefing → `{winner, confidence, reasoning}`.
   Pure handicapping, uninfluenced by the market.
 - **Step 2 — BET** (same model, now shown odds + bankroll): takes its own step-1 prediction
-  + confidence + the 1X2 odds + current bankroll + 25% cap → `{pick, stake}` **or pass**.
+  + confidence + the 1X2 odds + current bankroll + 25% cap → `{pick, stake, p_revised}`
+  **or pass**. The market price is treated as EVIDENCE: the model must reconcile its blind
+  forecast with the line and state a *revised* probability for its pick, and the negative-EV
+  guard (`MIN_BET_EV`) runs on that revised number. The revised probability is persisted on
+  the bet, so the report can measure each model's market-update behaviour (how far it moves
+  toward the line, and whether moving helped).
 
 Conviction from step 1 is the bridge into step 2 — the stake reflects *how sure* it was.
 Hiding odds until step 2 means an agent disagreeing with the bookies does so on football
 merit, not because it saw the price first.
+
+> **Why the revised probability exists (added 2026-06-13, after 3 matchdays):** blind
+> Step-1 distributions proved systematically FLATTER than the market — every model landed
+> near ~45/30/25 regardless of matchup, ~10–15 points under the market on clear favorites.
+> With the EV guard judged at those blind numbers, no short-priced favorite could ever be
+> bet (p × odds < 1 by construction) while every underdog showed a phantom 15–35% edge —
+> so all seven agents predicted the favorite and bet the dog, every match with a clear
+> favorite (see fixtures 103/105 vs the near-even 104). Judging EV at a post-market revised
+> probability restores favorite bets and makes "how much do you trust yourself vs the
+> market" the model-attributable skill under test. See `tasks/todo-market-update.md`.
 
 ### Scoring / Settlement Engine
 Settles bets against real results, updates both leaderboards.

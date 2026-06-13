@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS bet (
     pick        TEXT,                                   -- NULL = pass
     stake       REAL NOT NULL DEFAULT 0,
     odds_at_bet REAL,
+    p_revised   REAL,                                   -- post-market revised prob for pick
     reasoning   TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
     PRIMARY KEY (model_name, fixture_id)
@@ -279,6 +280,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "model_call", "prompt_text", "TEXT")
     _add_column_if_missing(conn, "model_call", "annotations_json", "TEXT")
     _add_column_if_missing(conn, "prediction", "key_factors", "TEXT")
+    _add_column_if_missing(conn, "bet", "p_revised", "REAL")
     # The secret Human Challenger is just another competitor row, flagged so public board
     # views can exclude him while the engine (settlement, decay, accuracy) treats him as a
     # peer. Defaults to 0 so every existing AI row stays a normal competitor.
@@ -599,14 +601,15 @@ def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
     """Insert or replace one model's Step-2 bet for a fixture (pick=None → pass)."""
     conn.execute(
         "INSERT OR REPLACE INTO bet "
-        "(model_name, fixture_id, pick, stake, odds_at_bet, reasoning, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             b.model_name,
             b.fixture_id,
             b.pick.value if b.pick else None,
             b.stake,
             b.odds_at_bet,
+            b.p_revised,
             b.reasoning,
             b.created_at.isoformat(),
         ),
@@ -617,8 +620,8 @@ def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
 def get_bet(conn: sqlite3.Connection, model_name: str, fixture_id: int) -> Bet | None:
     """Fetch one model's bet for a fixture, or None."""
     row = conn.execute(
-        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, reasoning, created_at "
-        "FROM bet WHERE model_name = ? AND fixture_id = ?",
+        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, "
+        "created_at FROM bet WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
     ).fetchone()
     if not row:
@@ -642,8 +645,8 @@ def consensus_odds(conn: sqlite3.Connection, fixture_id: int) -> OddsSnapshot | 
 def list_bets(conn: sqlite3.Connection, fixture_id: int) -> list[Bet]:
     """Return every persisted bet for a fixture, ordered by model (deterministic)."""
     rows = conn.execute(
-        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, reasoning, created_at "
-        "FROM bet WHERE fixture_id = ? ORDER BY model_name",
+        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, "
+        "created_at FROM bet WHERE fixture_id = ? ORDER BY model_name",
         (fixture_id,),
     ).fetchall()
     out: list[Bet] = []

@@ -4,11 +4,16 @@ Every model runs the SAME two steps over the SAME briefing; only the reasoning
 engine differs, which is what makes the leaderboard attributable to skill:
 
     Step 1 PREDICT (odds HIDDEN): briefing -> {winner, confidence, reasoning}
-    Step 2 BET     (odds SHOWN) : + bankroll + 25% cap -> {pick, stake} or pass
+    Step 2 BET     (odds SHOWN) : reconcile forecast with the market + bankroll +
+                                  25% cap -> {pick, stake, p_revised} or pass
 
 The system prompt (the gambler mindset induction) is identical for all seven —
 fairness lives there. Odds are withheld until Step 2 so the football judgment is
-uninfluenced by the market. Confidence from Step 1 is the bridge into the stake.
+uninfluenced by the market. At Step 2 the market price is treated as EVIDENCE: the
+model must state a revised probability for its pick after weighing the market, and
+the negative-EV guard runs on that revised number (blind Step-1 distributions proved
+systematically flatter than the market, which made every short-priced favorite look
+-EV and forced all agents onto underdogs — see tasks/todo-market-update.md).
 """
 
 from __future__ import annotations
@@ -97,6 +102,10 @@ Principles you live by:
 from what the offered odds imply. Value can be on a favorite OR an underdog; chase \
 mispriced lines in either direction, never an upset for its own sake. Most matches offer \
 no edge.
+- Respect the market: the price aggregates informed money and information you may not \
+have. When your read differs sharply from the line, first ask what the market knows that \
+you don't. Genuine edges are usually small — back a big disagreement only when you can \
+name the specific thing the market is mispricing.
 - Passing is not weakness — disciplined gamblers skip matches with no edge. Betting \
 every match bleeds money to the margin.
 - Stake size should scale with the size of your edge and your conviction, never exceeding \
@@ -402,14 +411,23 @@ the bet must beat just to not lose money:
   draw:          {odds.draw}  (fair ~{fair_draw:.0%}, break-even ~{1 / odds.draw:.0%})
   away ({away}): {odds.away}  (fair ~{fair_away:.0%}, break-even ~{1 / odds.away:.0%})
 
-A bet is profitable only when YOUR probability for that outcome beats its BREAK-EVEN — i.e. \
-expected value = your_probability x odds - 1 is positive. Bet ONLY on a clearly positive-EV \
-outcome; otherwise PASS (a bet that is negative-EV by your own probabilities will be \
-overridden to a pass). Your bankroll: ${bankroll:,.0f}. Per-match cap: ${cap:,.0f} (25%). \
-Stake must not exceed the cap.{exposure_note}
+The market is EVIDENCE, not just an opponent: these prices aggregate sharp, informed \
+money. FIRST RECONCILE: where the market's fair number disagrees with your earlier \
+forecast, decide how much of the gap is your genuine insight and how much is information \
+you lack — then state your REVISED probability that your pick wins. Updating toward the \
+market is normal; real edges are small. A revised probability implying a huge edge must \
+rest on a specific, nameable thing the market is mispricing — never on your forecast \
+alone.
+
+A bet stands only when your REVISED probability beats the pick's BREAK-EVEN by a clear \
+margin — expected value = revised_probability x odds - 1 must exceed {MIN_BET_EV:+.2f}, \
+or the bet is overridden to a pass. Your bankroll: ${bankroll:,.0f}. Per-match cap: \
+${cap:,.0f} (25%). Stake must not exceed the cap.{exposure_note}
 
 Respond with ONLY a JSON object, no other text:
-{{"pick": "home" | "draw" | "away" | "pass", "stake": <dollars, 0 to {cap:.0f}>, \
+{{"pick": "home" | "draw" | "away" | "pass", "p_revised": <0.0-1.0, your revised \
+probability that your pick wins after weighing the market; null when passing>, \
+"stake": <dollars, 0 to {cap:.0f}>, \
 "reasoning": "<2-5 sentences a football fan would enjoy: tell the match story (form, key \
 matchups, tactics, team news) and why it makes your pick more or less likely than the price \
 suggests, then the value in plain words and why this stake. Lead with the football — no jargon \
@@ -443,23 +461,43 @@ like Kelly, EV, or bare percentages>"}}"""
 
     pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
 
-    # Negative-EV guard (P1-1): a bet must be positive-EV by the model's OWN probability at
-    # the OFFERED odds (EV = p*odds - 1). The offered odds — not the no-vig fair number — are
-    # what the bet pays, so a bet that loses money by the model's own forecast is overridden
-    # to a pass (also catches the "confident but bet anyway" inconsistency).
-    if pick is not None and stake > 0 and prediction.has_distribution:
-        p_pick = {
-            Outcome.HOME: prediction.p_home,
-            Outcome.DRAW: prediction.p_draw,
-            Outcome.AWAY: prediction.p_away,
-        }[pick]
-        ev = p_pick * _odds_for(odds, pick) - 1
-        if ev <= MIN_BET_EV:
-            reasoning = (
-                f"{reasoning}  [auto-pass: EV {ev:+.2f} ≤ {MIN_BET_EV:+.2f} "
-                "by own probabilities]"
-            ).strip()
-            pick, stake = None, 0.0
+    # Revised probability (market reconciliation): the model's post-odds probability for
+    # its pick. Lenient parse — anything missing, non-finite, or out of [0,1] becomes None
+    # and the EV guard falls back to the Step-1 probability.
+    p_revised: float | None
+    try:
+        p_revised = float(data["p_revised"])
+    except (KeyError, TypeError, ValueError):
+        p_revised = None
+    if p_revised is not None and not (
+        math.isfinite(p_revised) and 0.0 <= p_revised <= 1.0
+    ):
+        p_revised = None
+
+    # Negative-EV guard (P1-1): a bet must clear MIN_BET_EV at the OFFERED odds
+    # (EV = p*odds - 1), judged at the model's REVISED probability — the number it stands
+    # behind after weighing the market — falling back to its blind Step-1 probability when
+    # no revised one was given. The offered odds — not the no-vig fair number — are what
+    # the bet pays, so a bet that loses money by the model's own stated probability is
+    # overridden to a pass (also catches the "confident but bet anyway" inconsistency).
+    if pick is not None and stake > 0:
+        p_eff = p_revised
+        basis = "revised probability"
+        if p_eff is None and prediction.has_distribution:
+            p_eff = {
+                Outcome.HOME: prediction.p_home,
+                Outcome.DRAW: prediction.p_draw,
+                Outcome.AWAY: prediction.p_away,
+            }[pick]
+            basis = "step-1 probability (no revised given)"
+        if p_eff is not None:
+            ev = p_eff * _odds_for(odds, pick) - 1
+            if ev <= MIN_BET_EV:
+                reasoning = (
+                    f"{reasoning}  [auto-pass: EV {ev:+.2f} ≤ {MIN_BET_EV:+.2f} "
+                    f"by {basis}]"
+                ).strip()
+                pick, stake = None, 0.0
 
     if pick is None or stake <= 0:
         result = Bet(
@@ -479,6 +517,7 @@ like Kelly, EV, or bare percentages>"}}"""
             pick=pick,
             stake=round(stake, 2),
             odds_at_bet=_odds_for(odds, pick),
+            p_revised=p_revised,
             reasoning=reasoning,
             created_at=_now(),
         )
@@ -616,6 +655,8 @@ def format_reasoning(
         stake = f"${b.stake:,.0f}" + (
             f" @ {b.odds_at_bet:.2f}" if b.odds_at_bet else ""
         )
+        if b.p_revised is not None:
+            stake += f" · revised p {b.p_revised:.0%}"
         score = (
             f" {pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else ""
         )
@@ -646,7 +687,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
     print(f"Fixture {args.fixture_id}: {home} vs {away}\n")
     print(
         f"{'model':<18}{'predict':<8}{'score':>6}{'conf':>7}"
-        f"{'bet':>7}{'stake':>12}{'odds':>7}"
+        f"{'bet':>7}{'stake':>12}{'odds':>7}{'rev':>6}"
     )
     completed = [(r.prediction, r.bet) for r in runs if r.status == "ok"]
     for pred, b in completed:
@@ -655,9 +696,10 @@ def _cmd_predict(args: argparse.Namespace) -> None:
         score = (
             f"{pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else "—"
         )
+        rev = f"{b.p_revised:.2f}" if b.p_revised is not None else "—"
         print(
             f"{pred.model_name:<18}{pred.winner.value:<8}{score:>6}{pred.confidence:>7.2f}"
-            f"{pick:>7}{b.stake:>12,.0f}{odds:>7}"
+            f"{pick:>7}{b.stake:>12,.0f}{odds:>7}{rev:>6}"
         )
     # Report any model that did not fully complete (P1-4) — never hide a partial run.
     incomplete = [r for r in runs if r.status != "ok"]
