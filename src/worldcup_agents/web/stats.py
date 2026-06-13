@@ -416,6 +416,15 @@ def leaderboard_accuracy(conn: sqlite3.Connection) -> list[dict]:
     return rows
 
 
+def leaderboard_brier(conn: sqlite3.Connection) -> dict:
+    """Reasoning board: Brier score on the blind Step-1 forecast (lower = better),
+    with agent metadata attached and the uniform-guess baseline for reference."""
+    rows = leaderboard.brier_standings(conn)
+    for r in rows:
+        r["meta"] = agents_meta.meta_for(r["model"])
+    return {"standings": rows, "baseline": leaderboard.BRIER_UNIFORM_BASELINE}
+
+
 # ---- telemetry -----------------------------------------------------------
 
 

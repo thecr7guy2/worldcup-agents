@@ -100,6 +100,15 @@ def api_leaderboard_accuracy() -> list[dict]:
         conn.close()
 
 
+@app.get("/api/leaderboard/brier")
+def api_leaderboard_brier() -> dict:
+    conn = get_conn()
+    try:
+        return stats.leaderboard_brier(conn)
+    finally:
+        conn.close()
+
+
 @app.get("/api/fixtures")
 def api_fixtures(day: str | None = None, stage: str | None = None) -> list[dict]:
     conn = get_conn()

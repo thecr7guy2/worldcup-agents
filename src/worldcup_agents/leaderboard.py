@@ -112,6 +112,66 @@ def accuracy_standings(
     return rows
 
 
+# Brier score of a uniform 1X2 guess (33/33/33): the skill floor every model must beat.
+# = 2*(1/3)^2 + (1/3 - 1)^2 = 0.667. Printed alongside the board as a reference line.
+BRIER_UNIFORM_BASELINE = 2 * (1 / 3) ** 2 + (1 / 3 - 1) ** 2
+
+
+def brier_standings(
+    conn: sqlite3.Connection, *, include_human: bool = False
+) -> list[dict]:
+    """Per-model multi-class Brier score over the BLIND Step-1 distribution — the
+    reasoning leaderboard (DESIGN §6).
+
+    For each prediction on a fixture with a known 90' result, the Brier score is
+    `sum over {home,draw,away} of (p_outcome - actual)^2`, where `actual` is 1 for the
+    outcome that happened and 0 otherwise. Range 0 (perfect) .. 2 (confidently wrong);
+    LOWER IS BETTER. Averaged per model. Because it grades the probabilities the model
+    committed to BEFORE odds are shown, it is immune to market-copying at the bet stage —
+    unlike bankroll, it measures probability judgment directly and with far less variance.
+
+    Only predictions carrying a full distribution are graded (legacy rows without
+    `p_home/p_draw/p_away` are skipped and reported via `graded`). Returns
+    {model, brier, graded}, ordered by brier ascending (best first). The hidden Human
+    Challenger is excluded unless include_human=True, mirroring accuracy_standings.
+    """
+    finished: dict[int, Fixture] = {
+        fx.id: fx
+        for fx in db.list_fixtures(conn)
+        if fx.status == MatchStatus.FINISHED and fx.result_90() is not None
+    }
+    hidden = set() if include_human else db.human_names(conn)
+    tally: dict[str, dict] = {}
+    for p in db.list_predictions(conn):
+        if p.model_name in hidden:
+            continue
+        fx = finished.get(p.fixture_id)
+        if fx is None or not p.has_distribution:
+            continue  # no settled result, or no distribution to score
+        result = fx.result_90()
+        actual = {
+            Outcome.HOME: 1.0 if result == Outcome.HOME else 0.0,
+            Outcome.DRAW: 1.0 if result == Outcome.DRAW else 0.0,
+            Outcome.AWAY: 1.0 if result == Outcome.AWAY else 0.0,
+        }
+        brier = (
+            (p.p_home - actual[Outcome.HOME]) ** 2
+            + (p.p_draw - actual[Outcome.DRAW]) ** 2
+            + (p.p_away - actual[Outcome.AWAY]) ** 2
+        )
+        t = tally.setdefault(p.model_name, {"sum": 0.0, "graded": 0})
+        t["sum"] += brier
+        t["graded"] += 1
+
+    rows = [
+        {"model": m, "brier": t["sum"] / t["graded"], "graded": t["graded"]}
+        for m, t in tally.items()
+        if t["graded"]
+    ]
+    rows.sort(key=lambda r: r["brier"])  # lower is better
+    return rows
+
+
 # ---- CLI -----------------------------------------------------------------
 
 
@@ -145,14 +205,29 @@ def _print_accuracy(conn: sqlite3.Connection) -> None:
         )
 
 
+def _print_brier(conn: sqlite3.Connection) -> None:
+    rows = brier_standings(conn)
+    print(
+        "Reasoning leaderboard — Brier score on the blind Step-1 forecast "
+        "(lower = better; immune to market-copying)"
+    )
+    if not rows:
+        print("(no graded predictions with a distribution yet)")
+        return
+    print(f"{'#':<3}{'model':<18}{'brier':>9}{'graded':>8}")
+    for i, r in enumerate(rows, start=1):
+        print(f"{i:<3}{r['model']:<18}{r['brier']:>9.4f}{r['graded']:>8}")
+    print(f"   {'(uniform 33/33/33 baseline)':<18}{BRIER_UNIFORM_BASELINE:>9.4f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="worldcup_agents.leaderboard")
     parser.add_argument(
         "which",
         nargs="?",
-        choices=("both", "bankroll", "accuracy"),
+        choices=("both", "bankroll", "accuracy", "brier"),
         default="both",
-        help="which leaderboard to print (default: both)",
+        help="which leaderboard to print (default: both -> bankroll + accuracy + brier)",
     )
     args = parser.parse_args()
 
@@ -164,6 +239,10 @@ def main() -> None:
         print()
     if args.which in ("both", "accuracy"):
         _print_accuracy(conn)
+    if args.which == "both":
+        print()
+    if args.which in ("both", "brier"):
+        _print_brier(conn)
 
 
 if __name__ == "__main__":
