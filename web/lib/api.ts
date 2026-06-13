@@ -173,6 +173,18 @@ export interface AccuracyRow {
   hit_rate: number;
 }
 
+export interface BrierRow {
+  model: string;
+  meta: AgentMeta;
+  brier: number;
+  graded: number;
+}
+
+export interface BrierBoard {
+  standings: BrierRow[];
+  baseline: number;
+}
+
 export interface BoardEntry {
   model: string;
   meta: AgentMeta;
@@ -231,6 +243,7 @@ export const getCompetitor = (name: string) =>
   get<CompetitorDetail>(`/api/competitors/${encodeURIComponent(name)}`);
 export const getBankrollBoard = () => get<Competitor[]>("/api/leaderboard/bankroll");
 export const getAccuracyBoard = () => get<AccuracyRow[]>("/api/leaderboard/accuracy");
+export const getBrierBoard = () => get<BrierBoard>("/api/leaderboard/brier");
 export const getFixtures = (q: { day?: string; stage?: string } = {}) => {
   const p = new URLSearchParams();
   if (q.day) p.set("day", q.day);

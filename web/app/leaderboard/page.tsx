@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { Trophy, Target, Crosshair } from "@phosphor-icons/react/dist/ssr";
-import { getBankrollBoard, getAccuracyBoard, getOverview, getCompetitor } from "@/lib/api";
+import { Trophy, Target, Crosshair, Brain } from "@phosphor-icons/react/dist/ssr";
+import { getBankrollBoard, getAccuracyBoard, getBrierBoard, getOverview, getCompetitor } from "@/lib/api";
 import { money, signedMoney, signedPct, pct } from "@/lib/format";
 import { Reveal } from "@/components/Reveal";
 import { BankrollBar } from "@/components/BankrollBar";
@@ -11,9 +11,12 @@ import { Empty } from "@/components/Empty";
 export const metadata = { title: "Standings | The Arena" };
 
 export default async function LeaderboardPage() {
-  const [bankroll, accuracy, overview] = await Promise.all([
+  const [bankroll, accuracy, brier, overview] = await Promise.all([
     getBankrollBoard(),
     getAccuracyBoard(),
+    // Degrade gracefully if the brier route isn't live yet (e.g. wc-api not yet
+    // restarted after deploy): show the empty state, never crash the whole board.
+    getBrierBoard().catch(() => ({ standings: [], baseline: 2 / 3 })),
     getOverview(),
   ]);
   const allTied = bankroll.every((c) => c.bankroll === bankroll[0].bankroll);
@@ -33,8 +36,8 @@ export default async function LeaderboardPage() {
       <Reveal>
         <SectionHeading
           kicker="Standings"
-          title="Two crowns, two winners"
-          sub="The bankroll board rewards the best gambler. The accuracy board rewards the best forecaster. They are rarely the same model."
+          title="Three ways to win"
+          sub="Bankroll rewards the sharpest gambler. Accuracy rewards the most correct forecaster. Reasoning rewards the best-calibrated mind — graded on its probabilities before the odds are ever shown. They are rarely the same model."
         />
       </Reveal>
 
@@ -168,6 +171,73 @@ export default async function LeaderboardPage() {
           <Empty icon={Target} title="No graded predictions yet">
             Accuracy is scored off each model&apos;s 90-minute call once results come in.
             The board fills in after the first matches finish.
+          </Empty>
+        )}
+      </section>
+
+      {/* reasoning board (Brier — calibration of the blind forecast) */}
+      <section>
+        <h2 className="mb-2 flex items-center gap-2 font-display text-xl font-bold text-ink">
+          <Brain size={20} weight="bold" className="text-volt" /> Reasoning
+          <span className="mono text-[11px] font-normal uppercase tracking-[0.16em] text-faint">
+            best calibrated
+          </span>
+        </h2>
+        <p className="mb-4 max-w-2xl text-sm text-muted">
+          Lower is better. The Brier score measures how closely each model&apos;s 1X2
+          probabilities matched what actually happened — graded on its blind Step-1 forecast,
+          before it ever saw the odds, so it can&apos;t be gamed by following the market.{" "}
+          <span className="mono text-faint">
+            {brier.baseline.toFixed(3)} = no better than a 33/33/33 guess.
+          </span>
+        </p>
+
+        {brier.standings.length > 0 ? (
+          <div className="overflow-x-auto border border-line-strong bg-surface shadow-[6px_6px_0_rgba(22,29,24,.12)]">
+            <table className="w-full min-w-[480px] text-sm">
+              <thead>
+                <tr className="mono border-b border-line text-[10px] uppercase tracking-[0.14em] text-faint">
+                  <th className="px-4 py-3 text-left font-medium">#</th>
+                  <th className="px-4 py-3 text-left font-medium">Model</th>
+                  <th className="px-4 py-3 text-right font-medium">Brier</th>
+                  <th className="px-4 py-3 text-right font-medium">Graded</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {brier.standings.map((r, i) => (
+                  <tr key={r.model} className={`hover:bg-surface-2 ${i === 0 ? "bg-volt-dim/40" : ""}`}>
+                    <td className="mono px-4 py-3 tabular-nums text-muted">{i + 1}</td>
+                    <td className="px-4 py-3">
+                      <Link href={`/agents/${encodeURIComponent(r.model)}`} className="flex items-center gap-2 font-medium text-ink hover:text-volt">
+                        <span className="grid h-7 w-7 place-items-center rounded-[7px] font-display text-sm font-bold text-bg" style={{ background: r.meta.color }}>
+                          {r.meta.sigil}
+                        </span>
+                        <span>
+                          <span className="block">{r.model}</span>
+                          <span className="mono block text-[9px] uppercase text-faint">{r.meta.vendor}</span>
+                        </span>
+                      </Link>
+                    </td>
+                    <td className="mono px-4 py-3 text-right font-bold tabular-nums text-volt">{r.brier.toFixed(3)}</td>
+                    <td className="mono px-4 py-3 text-right tabular-nums text-muted">{r.graded}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="mono border-t border-line text-[11px] text-faint">
+                  <td className="px-4 py-2.5" colSpan={2}>
+                    Uniform 33/33/33 baseline
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{brier.baseline.toFixed(3)}</td>
+                  <td className="px-4 py-2.5" />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <Empty icon={Brain} title="No graded predictions yet">
+            Reasoning is scored once results come in — each model&apos;s blind probability
+            forecast is graded against what actually happened.
           </Empty>
         )}
       </section>
