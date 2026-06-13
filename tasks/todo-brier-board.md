@@ -8,16 +8,25 @@ crucially — made before odds are shown, so market-copying cannot contaminate i
 (`p_home/p_draw/p_away` + 90' result) are already stored: pure-additive, no migration.
 
 ## Scope (this slice)
-- [x] Commit + push the already-running market-reconciliation change (separate commit).
-- [ ] `leaderboard.brier_standings()` — multi-class Brier over graded predictions, ascending.
-- [ ] CLI `brier` board + uniform baseline (~0.667) for reference.
-- [ ] `web/stats.leaderboard_brier()` + `/api/leaderboard/brier` route (additive, read-only).
-- [ ] Verify on a COPY of the live DB (zero risk to live run).
-- [ ] Commit + push.
-- [ ] Deploy: reconcile server git, pull. Flag sudo restarts (wc-api) for the user.
+- [x] Commit + push the already-running market-reconciliation change (separate commit 8d6d7b7).
+- [x] `leaderboard.brier_standings()` — multi-class Brier over graded predictions, ascending.
+- [x] CLI `brier` board + uniform baseline (0.667) for reference.
+- [x] `web/stats.leaderboard_brier()` + `/api/leaderboard/brier` route (additive, read-only).
+- [x] Verify on a COPY of the live DB — Gemini avg 0.4431 reproduced by hand; ruff clean.
+- [x] Commit + push (85b244b).
+- [x] Deploy: server fast-forwarded to 85b244b, uv sync no-op, brier CLI live on prod DB.
+      PENDING (user, needs interactive sudo): `sudo systemctl restart wc-api.service`
+      — until then /api/leaderboard/brier is 404 and the API won't expose p_revised.
 
-## Out of scope (follow-up, flagged to user)
-- Next.js public page for the reasoning board (needs web rebuild + sudo restart I can't do).
+## Web frontend (done — commit 1aa69d8)
+- [x] Reasoning section on /leaderboard under accuracy: Brier table + baseline footer +
+      plain-English caption. Fetch degrades gracefully (empty state) if route is 404.
+- [x] tsc --noEmit clean locally; `npm run build` clean on the server (11/11 pages,
+      /leaderboard is dynamic). New .next built on server.
+- [ ] PENDING (user, interactive sudo): restart wc-api AND wc-web to serve the route +
+      the new build.
+
+## Still out of scope (future)
 - Brier of `p_revised` vs blind `p` to validate the market step (needs Phase-2 bets first;
   0 exist yet).
 
