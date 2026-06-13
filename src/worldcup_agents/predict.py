@@ -4,16 +4,23 @@ Every model runs the SAME two steps over the SAME briefing; only the reasoning
 engine differs, which is what makes the leaderboard attributable to skill:
 
     Step 1 PREDICT (odds HIDDEN): briefing -> {winner, confidence, reasoning}
-    Step 2 BET     (odds SHOWN) : reconcile forecast with the market + bankroll +
-                                  25% cap -> {pick, stake, p_revised} or pass
+    Step 2 BET     (odds SHOWN) : reconcile forecast with the market + bankroll ->
+                                  revised 1X2 distribution + pick/stake or pass
 
 The system prompt (the gambler mindset induction) is identical for all seven —
 fairness lives there. Odds are withheld until Step 2 so the football judgment is
 uninfluenced by the market. At Step 2 the market price is treated as EVIDENCE: the
-model must state a revised probability for its pick after weighing the market, and
-the negative-EV guard runs on that revised number (blind Step-1 distributions proved
-systematically flatter than the market, which made every short-priced favorite look
--EV and forced all agents onto underdogs — see tasks/todo-market-update.md).
+model must state a complete revised 1X2 distribution after weighing the market (blind
+Step-1 distributions proved systematically flatter than the market, which made every
+short-priced favorite look -EV and forced all agents onto underdogs).
+
+The model OWNS the pick and its preferred stake; the engine is a risk layer. It requires the
+requested pick to clear a small EV gate at the offered odds, then sizes the stake to
+min(requested, half-Kelly, per-match cap, remaining exposure), lifted to a 2% minimum floor.
+Kelly stays at HALF at every stage (these probabilities are uncalibrated, so full Kelly is
+unsafe); only the per-match cap ramps by round (25% -> 50% by the final). A malformed
+distribution is retried once, then fails closed to a pass. See tasks/todo-hybrid-risk-engine.md
++ DESIGN §2.
 """
 
 from __future__ import annotations
@@ -29,11 +36,21 @@ from pathlib import Path
 
 from . import db
 from .config import (
-    MAX_STAKE_FRACTION,
+    MAX_AGGREGATE_EXPOSURE,
     MIN_BET_EV,
+    MIN_STAKE_FRACTION,
     PREDICT_MAX_WORKERS,
     PREDICTION_MODELS,
     ModelSpec,
+    stage_cap_fraction,
+    stage_kelly_fraction,
+)
+from .experiment import (
+    BET_PROMPT_VERSION,
+    BETTING_RULES_VERSION,
+    EXPERIMENT_PHASE,
+    FORECAST_PROMPT_VERSION,
+    git_commit,
 )
 from .llm import LLMError, complete, extract_json
 from .models import (
@@ -67,6 +84,19 @@ class ModelRun:
     bet: Bet | None = None
     error: str | None = None
 
+
+_REVISED_SUM_TOLERANCE = 0.02
+
+# Appended to the bet prompt on the ONE retry when a response lacked a valid complete
+# distribution. We re-ask rather than fall back to the blind Step-1 forecast: the blind
+# distribution is systematically flat, and reusing it for the EV guard is exactly what
+# forced every agent off favorites in the Canada-Bosnia failure.
+_REVISED_RETRY_SUFFIX = (
+    "\n\nYour previous response did not contain a valid complete 1X2 distribution. "
+    "Respond AGAIN with ONLY the JSON object, giving numeric p_home_revised, "
+    "p_draw_revised, and p_away_revised that sum to 1.0."
+)
+
 # Two system prompts, one per step — both identical across all seven competitors, so the
 # only variable under test stays the model (DESIGN §5 "mindset induction").
 #
@@ -98,18 +128,18 @@ your sole objective is to grow it as much as possible across the tournament — 
 as if your livelihood depends on it.
 
 Principles you live by:
-- Bet ONLY where you see genuine value — where your own read of the probability differs \
-from what the offered odds imply. Value can be on a favorite OR an underdog; chase \
-mispriced lines in either direction, never an upset for its own sake. Most matches offer \
-no edge.
-- Respect the market: the price aggregates informed money and information you may not \
-have. When your read differs sharply from the line, first ask what the market knows that \
-you don't. Genuine edges are usually small — back a big disagreement only when you can \
-name the specific thing the market is mispricing.
-- Passing is not weakness — disciplined gamblers skip matches with no edge. Betting \
-every match bleeds money to the margin.
-- Stake size should scale with the size of your edge and your conviction, never exceeding \
-the per-match cap.
+- Back your genuine read. Where your own probability for an outcome CLEARLY beats what the \
+offered odds imply, there is value — on a favorite OR an underdog. You do NOT need a big edge, \
+just a real one: a hair-thin gap is probability noise, not an edge, so back the differences \
+you actually believe rather than holding back the ones you do.
+- Respect the market as evidence, not gospel: the price aggregates informed money, so weigh \
+it and ask what it might know that you don't. You may still disagree when you have a concrete \
+football reason — a BIG disagreement needs a specific, nameable thing the market is \
+mispricing, but a modest lean does not.
+- Pass ONLY when you genuinely cannot separate the outcomes — a true coin-flip where the \
+price already looks right. Do not pass a match you have a real read on just because it is \
+close or high-profile; equally, never manufacture an edge to force a bet on a fairly-priced \
+game. A risk engine sizes and caps your stake, so bet what your read is worth.
 - Explain every bet like a sharp football pundit, not a spreadsheet: ground your read of the \
 result in the match itself — form, key matchups, tactics, team news, motivation — and put the \
 price judgment in plain words. Skip the jargon (no "Kelly", no "EV", no bare percentages).
@@ -317,6 +347,11 @@ names the factors that actually drove your forecast, as short lowercase tags (ex
         confidence=confidence,
         reasoning=reasoning,
         key_factors=key_factors,
+        experiment_phase=EXPERIMENT_PHASE,
+        prompt_version=FORECAST_PROMPT_VERSION,
+        requested_model_id=model.model_id,
+        call_generation_id=call.generation_id,
+        git_commit=git_commit(),
         created_at=_now(),
     )
     db.upsert_prediction(conn, pred)
@@ -330,6 +365,86 @@ def _odds_for(odds: OddsSnapshot, pick: Outcome) -> float:
     return {Outcome.HOME: odds.home, Outcome.DRAW: odds.draw, Outcome.AWAY: odds.away}[
         pick
     ]
+
+
+def _parse_revised_distribution(
+    data: dict,
+) -> tuple[dict[Outcome, float] | None, str | None]:
+    """Validate and normalize the model's complete post-market 1X2 distribution."""
+    keys = {
+        Outcome.HOME: "p_home_revised",
+        Outcome.DRAW: "p_draw_revised",
+        Outcome.AWAY: "p_away_revised",
+    }
+    if any(key not in data or data[key] is None for key in keys.values()):
+        return None, "missing_revised_distribution"
+
+    values: dict[Outcome, float] = {}
+    try:
+        for outcome, key in keys.items():
+            values[outcome] = float(data[key])
+    except (TypeError, ValueError):
+        return None, "invalid_revised_distribution"
+
+    if any(not math.isfinite(value) or value < 0 for value in values.values()):
+        return None, "invalid_revised_distribution"
+    total = sum(values.values())
+    if total <= 0 or abs(total - 1.0) > _REVISED_SUM_TOLERANCE:
+        return None, "invalid_revised_distribution"
+    return {outcome: value / total for outcome, value in values.items()}, None
+
+
+def _revised_evs(
+    distribution: dict[Outcome, float], odds: OddsSnapshot
+) -> dict[Outcome, float]:
+    """Expected value at offered odds for every outcome in a revised distribution."""
+    return {
+        outcome: probability * _odds_for(odds, outcome) - 1
+        for outcome, probability in distribution.items()
+    }
+
+
+def _size_stake(
+    requested: float,
+    ev: float,
+    pick_odds: float,
+    bankroll: float,
+    open_stake: float,
+    *,
+    kelly_fraction: float,
+    cap_fraction: float,
+) -> tuple[float, str | None]:
+    """Resolve the final stake from the model's request and the engine's risk limits.
+
+    The stake is shrunk toward the smallest of the (stage) fractional-Kelly ceiling, the
+    (stage) per-match cap, and the remaining aggregate exposure, then lifted to the
+    minimum-bet floor — the one rule that may RAISE a stake, itself bounded by those hard
+    limits so it never breaches the cap or exposure. Caller guarantees ev > 0. Returns
+    (stake, engine_adjustment) where the adjustment names the binding rule, or None when the
+    requested amount stood unchanged.
+    """
+    cap = bankroll * cap_fraction
+    net_odds = pick_odds - 1
+    kelly_ceiling = bankroll * kelly_fraction * (ev / net_odds) if net_odds > 0 else 0.0
+    remaining_exposure = max(0.0, bankroll * MAX_AGGREGATE_EXPOSURE - open_stake)
+    hard_high = min(cap, remaining_exposure)  # a bet may never breach the cap or exposure
+    floor = min(bankroll * MIN_STAKE_FRACTION, hard_high)
+    natural = min(requested, kelly_ceiling, hard_high)  # request, Kelly- and limit-capped
+    final = max(natural, floor)  # no trivial bets
+
+    if final <= 0:
+        return 0.0, ("exposure_cap" if remaining_exposure <= 0 else None)
+    if final > requested:
+        return final, "min_floor"  # the floor lifted a sub-minimum request
+    if final < requested:
+        if final == remaining_exposure:
+            return final, "exposure_cap"
+        if final == cap:
+            return final, "stake_cap"
+        if final == kelly_ceiling:
+            return final, "kelly_cap"
+        return final, "min_floor"
+    return final, None
 
 
 def _exposure_note(bankroll: float, open_stake: float, open_count: int) -> str:
@@ -368,10 +483,15 @@ def bet(
         if existing:
             return existing
 
-    cap = bankroll * MAX_STAKE_FRACTION
+    cap_fraction = stage_cap_fraction(fixture.stage.value)  # rises by round (25% -> 50%)
+    cap = bankroll * cap_fraction
 
-    # What this model has already committed to other still-unsettled matches. Surfaced (not
-    # reserved) so it can size against its free balance on busy/simultaneous matchdays.
+    # What this model has already committed to other still-unsettled matches — the basis for
+    # the aggregate-exposure cap in _size_stake. NOTE: this read-then-write is not atomic. The
+    # live timer processes fixtures sequentially (one run_fixture at a time), so a model never
+    # bets two fixtures at once and the 50% cap holds; two CONCURRENT manual runs on different
+    # fixtures could each read the same exposure and jointly exceed it. Acceptable under the
+    # single-writer timer; revisit (reserve/lock) only if concurrent manual runs are introduced.
     open_stake, open_count = db.open_exposure(conn, model.name)
     exposure_note = _exposure_note(bankroll, open_stake, open_count)
 
@@ -414,90 +534,131 @@ the bet must beat just to not lose money:
 The market is EVIDENCE, not just an opponent: these prices aggregate sharp, informed \
 money. FIRST RECONCILE: where the market's fair number disagrees with your earlier \
 forecast, decide how much of the gap is your genuine insight and how much is information \
-you lack — then state your REVISED probability that your pick wins. Updating toward the \
-market is normal; real edges are small. A revised probability implying a huge edge must \
-rest on a specific, nameable thing the market is mispricing — never on your forecast \
-alone.
+you lack — then state a COMPLETE REVISED 1X2 distribution for home, draw, and away. The \
+three revised probabilities must sum to 1.0. You may disagree with the line when you have a \
+concrete football reason; a LARGE disagreement needs a specific, nameable thing the market \
+is mispricing, but a modest lean does not.
 
-A bet stands only when your REVISED probability beats the pick's BREAK-EVEN by a clear \
-margin — expected value = revised_probability x odds - 1 must exceed {MIN_BET_EV:+.2f}, \
-or the bet is overridden to a pass. Your bankroll: ${bankroll:,.0f}. Per-match cap: \
-${cap:,.0f} (25%). Stake must not exceed the cap.{exposure_note}
+Then BET YOUR READ. When your revised probability for an outcome clears its break-even by a \
+REAL margin, that is a bet — EV = revised_probability x odds - 1 must exceed {MIN_BET_EV:+.1%}. \
+You do NOT need a big edge, just a genuine one: the stake is sized for you, so do not hold back \
+a real read — but a hair-thin gap is not an edge, so do not treat probability rounding as one. \
+PASS when this is a true toss-up you cannot separate or the price already looks right; do not \
+pass a match you have a real lean on just because it is close or high-profile, and never invent \
+an edge to bet a fairly-priced game.
+
+The engine validates your requested pick (it never substitutes another outcome) and sizes \
+the stake for you: it caps this match at ${cap:,.0f} ({cap_fraction:.0%} of bankroll, higher \
+in later rounds) and may trim for risk, so give your honest preferred amount. An unsupported \
+pick, or a non-pass without a valid complete distribution, is overridden to a pass. Your \
+bankroll: ${bankroll:,.0f}.{exposure_note}
 
 Respond with ONLY a JSON object, no other text:
-{{"pick": "home" | "draw" | "away" | "pass", "p_revised": <0.0-1.0, your revised \
-probability that your pick wins after weighing the market; null when passing>, \
+{{"p_home_revised": <0.0-1.0>, "p_draw_revised": <0.0-1.0>, \
+"p_away_revised": <0.0-1.0>, "pick": "home" | "draw" | "away" | "pass", \
 "stake": <dollars, 0 to {cap:.0f}>, \
 "reasoning": "<2-5 sentences a football fan would enjoy: tell the match story (form, key \
 matchups, tactics, team news) and why it makes your pick more or less likely than the price \
 suggests, then the value in plain words and why this stake. Lead with the football — no jargon \
 like Kelly, EV, or bare percentages>"}}"""
 
-    text, call = complete(
-        model.model_id,
-        prompt,
-        model_name=model.name,
-        step="bet",
-        fixture_id=fixture.id,
-        system=SYSTEM_GAMBLER,
-        max_tokens=25000,  # generous — let reasoning models think freely, never capped
-        temperature=0.5,
-        reasoning_effort="high",  # don't compromise reasoning quality
+    # Up to two attempts: a missing/malformed revised distribution earns ONE retry with a
+    # corrective nudge (_REVISED_RETRY_SUFFIX) — we re-ask rather than fall back to the flat
+    # blind forecast, which is what forced every agent off favorites in Canada-Bosnia.
+    # Everything else is taken from the final response as-is.
+    revised: dict[Outcome, float] | None = None
+    revised_issue: str | None = None
+    for attempt in range(2):
+        last_attempt = attempt == 1
+        text, call = complete(
+            model.model_id,
+            prompt if attempt == 0 else prompt + _REVISED_RETRY_SUFFIX,
+            model_name=model.name,
+            step="bet",
+            fixture_id=fixture.id,
+            system=SYSTEM_GAMBLER,
+            max_tokens=25000,  # generous — let reasoning models think freely, never capped
+            temperature=0.5,
+            reasoning_effort="high",  # don't compromise reasoning quality
+        )
+        db.log_model_call(conn, call)
+
+        try:
+            data = extract_json(text)
+        except LLMError:
+            if last_attempt:
+                raise
+            continue
+        raw_pick = str(data.get("pick", "pass")).strip().lower()
+        reasoning = str(data.get("reasoning", "")).strip()
+        invalid_request = raw_pick not in {"home", "draw", "away", "pass"}
+
+        # Stake validation (P2-2): json.loads lets NaN/inf through — coerce anything invalid,
+        # non-finite, or negative to 0 (a pass).
+        try:
+            stake = float(data.get("stake", 0) or 0)
+        except (TypeError, ValueError):
+            stake = 0.0
+            invalid_request = True
+        if not math.isfinite(stake) or stake < 0:
+            stake = 0.0
+            invalid_request = True
+
+        pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
+        if (raw_pick == "pass" and stake > 0) or (pick is not None and stake <= 0):
+            invalid_request = True
+
+        revised, revised_issue = _parse_revised_distribution(data)
+        if revised is not None or last_attempt:
+            break
+    p_home_revised = revised[Outcome.HOME] if revised else None
+    p_draw_revised = revised[Outcome.DRAW] if revised else None
+    p_away_revised = revised[Outcome.AWAY] if revised else None
+    p_revised = revised[pick] if revised and pick is not None else None
+
+    requested_pick = pick
+    requested_stake = stake
+    requested_p_revised = p_revised
+    engine_adjustment = (
+        "invalid_request" if invalid_request else revised_issue
     )
-    db.log_model_call(conn, call)
 
-    data = extract_json(text)
-    raw_pick = str(data.get("pick", "pass")).strip().lower()
-    reasoning = str(data.get("reasoning", "")).strip()
-
-    # Stake validation (P2-2): json.loads lets NaN/inf through — coerce anything invalid,
-    # non-finite, or negative to 0 (a pass).
-    try:
-        stake = float(data.get("stake", 0) or 0)
-    except (TypeError, ValueError):
-        stake = 0.0
-    if not math.isfinite(stake) or stake < 0:
-        stake = 0.0
-
-    pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
-
-    # Revised probability (market reconciliation): the model's post-odds probability for
-    # its pick. Lenient parse — anything missing, non-finite, or out of [0,1] becomes None
-    # and the EV guard falls back to the Step-1 probability.
-    p_revised: float | None
-    try:
-        p_revised = float(data["p_revised"])
-    except (KeyError, TypeError, ValueError):
-        p_revised = None
-    if p_revised is not None and not (
-        math.isfinite(p_revised) and 0.0 <= p_revised <= 1.0
-    ):
-        p_revised = None
-
-    # Negative-EV guard (P1-1): a bet must clear MIN_BET_EV at the OFFERED odds
-    # (EV = p*odds - 1), judged at the model's REVISED probability — the number it stands
-    # behind after weighing the market — falling back to its blind Step-1 probability when
-    # no revised one was given. The offered odds — not the no-vig fair number — are what
-    # the bet pays, so a bet that loses money by the model's own stated probability is
-    # overridden to a pass (also catches the "confident but bet anyway" inconsistency).
+    # Calculate all three EVs from one coherent distribution, but preserve model ownership
+    # of the pick: the engine validates the requested outcome and never substitutes another.
     if pick is not None and stake > 0:
-        p_eff = p_revised
-        basis = "revised probability"
-        if p_eff is None and prediction.has_distribution:
-            p_eff = {
-                Outcome.HOME: prediction.p_home,
-                Outcome.DRAW: prediction.p_draw,
-                Outcome.AWAY: prediction.p_away,
-            }[pick]
-            basis = "step-1 probability (no revised given)"
-        if p_eff is not None:
-            ev = p_eff * _odds_for(odds, pick) - 1
+        if revised is None:
+            issue = revised_issue or "missing_revised_distribution"
+            label = issue.replace("_", " ")
+            reasoning = (
+                f"{reasoning}  [auto-pass: {label}; revised EV could not be verified]"
+            ).strip()
+            pick, stake = None, 0.0
+            engine_adjustment = issue
+        else:
+            ev = _revised_evs(revised, odds)[pick]
             if ev <= MIN_BET_EV:
                 reasoning = (
-                    f"{reasoning}  [auto-pass: EV {ev:+.2f} ≤ {MIN_BET_EV:+.2f} "
-                    f"by {basis}]"
+                    f"{reasoning}  [auto-pass: EV {ev:+.1%} ≤ {MIN_BET_EV:+.1%} "
+                    "by revised probability]"
                 ).strip()
                 pick, stake = None, 0.0
+                engine_adjustment = "ev_guard"
+
+    # Stake protection: the engine sizes the surviving bet — shrink toward the stage-ramped
+    # half-to-full Kelly ceiling, per-match cap, and remaining exposure, then lift to the 2%
+    # minimum-bet floor (requested_stake is preserved above). A bet squeezed to zero (bankroll
+    # already fully committed) becomes a pass.
+    if pick is not None and stake > 0:
+        ev = _revised_evs(revised, odds)[pick]  # > 0 here — the EV guard has passed
+        stake, adj = _size_stake(
+            stake, ev, _odds_for(odds, pick), bankroll, open_stake,
+            kelly_fraction=stage_kelly_fraction(fixture.stage.value),
+            cap_fraction=cap_fraction,
+        )
+        if adj is not None:
+            engine_adjustment = adj
+        if stake <= 0:
+            pick = None  # no room left to bet — record an explicit pass
 
     if pick is None or stake <= 0:
         result = Bet(
@@ -506,11 +667,26 @@ like Kelly, EV, or bare percentages>"}}"""
             pick=None,
             stake=0.0,
             odds_at_bet=None,
+            p_home_revised=p_home_revised,
+            p_draw_revised=p_draw_revised,
+            p_away_revised=p_away_revised,
+            requested_pick=requested_pick,
+            requested_stake=requested_stake,
+            requested_p_revised=requested_p_revised,
+            engine_adjustment=engine_adjustment,
             reasoning=reasoning,
+            experiment_phase=EXPERIMENT_PHASE,
+            prompt_version=BET_PROMPT_VERSION,
+            rules_version=BETTING_RULES_VERSION,
+            requested_model_id=model.model_id,
+            call_generation_id=call.generation_id,
+            git_commit=git_commit(),
+            odds_snapshot_bookmaker=odds.bookmaker,
+            odds_snapshot_captured_at=odds.captured_at,
             created_at=_now(),
         )
     else:
-        stake = min(stake, cap)  # enforce the cap regardless of what the model said
+        # stake is already bounded by the cap above (one of the ceilings), so no clamp here.
         result = Bet(
             model_name=model.name,
             fixture_id=fixture.id,
@@ -518,7 +694,22 @@ like Kelly, EV, or bare percentages>"}}"""
             stake=round(stake, 2),
             odds_at_bet=_odds_for(odds, pick),
             p_revised=p_revised,
+            p_home_revised=p_home_revised,
+            p_draw_revised=p_draw_revised,
+            p_away_revised=p_away_revised,
+            requested_pick=requested_pick,
+            requested_stake=requested_stake,
+            requested_p_revised=requested_p_revised,
+            engine_adjustment=engine_adjustment,
             reasoning=reasoning,
+            experiment_phase=EXPERIMENT_PHASE,
+            prompt_version=BET_PROMPT_VERSION,
+            rules_version=BETTING_RULES_VERSION,
+            requested_model_id=model.model_id,
+            call_generation_id=call.generation_id,
+            git_commit=git_commit(),
+            odds_snapshot_bookmaker=odds.bookmaker,
+            odds_snapshot_captured_at=odds.captured_at,
             created_at=_now(),
         )
 
@@ -537,6 +728,7 @@ def _record_pass(
     model: ModelSpec,
     fixture: Fixture,
     reason: str,
+    odds: OddsSnapshot | None = None,
     *,
     force: bool = False,
 ) -> Bet:
@@ -552,7 +744,15 @@ def _record_pass(
         pick=None,
         stake=0.0,
         odds_at_bet=None,
+        engine_adjustment="eliminated",
         reasoning=reason,
+        experiment_phase=EXPERIMENT_PHASE,
+        prompt_version=BET_PROMPT_VERSION,
+        rules_version=BETTING_RULES_VERSION,
+        requested_model_id=model.model_id,
+        git_commit=git_commit(),
+        odds_snapshot_bookmaker=odds.bookmaker if odds else None,
+        odds_snapshot_captured_at=odds.captured_at if odds else None,
         created_at=_now(),
     )
     db.upsert_bet(conn, b)
@@ -619,7 +819,12 @@ def run_fixture(
             # betting is disabled — record an explicit pass instead of calling the bet model.
             if not active:
                 b = _record_pass(
-                    own, model, fixture, "eliminated — betting disabled", force=force
+                    own,
+                    model,
+                    fixture,
+                    "eliminated — betting disabled",
+                    odds,
+                    force=force,
                 )
                 return ModelRun(model.name, "ok", pred, b)
             try:
@@ -657,6 +862,12 @@ def format_reasoning(
         )
         if b.p_revised is not None:
             stake += f" · revised p {b.p_revised:.0%}"
+        revised = (
+            f"home {b.p_home_revised:.1%} · draw {b.p_draw_revised:.1%} · "
+            f"away {b.p_away_revised:.1%}"
+            if b.has_revised_distribution
+            else "not available"
+        )
         score = (
             f" {pred.pred_home_goals}-{pred.pred_away_goals}" if pred.has_score else ""
         )
@@ -673,6 +884,7 @@ def format_reasoning(
         lines.append(
             f"**Step 1 — prediction reasoning (odds hidden):**\n\n{pred.reasoning}\n"
         )
+        lines.append(f"**Step 2 revised 1X2:** {revised}\n")
         lines.append(f"**Step 2 — bet reasoning (odds shown):**\n\n{b.reasoning}\n")
     return "\n".join(lines)
 

@@ -54,12 +54,48 @@ separating football judgment from money judgment, so the payout never biases the
 - **Step 1 — PREDICT** (odds hidden): reads the briefing → `{winner, confidence, reasoning}`.
   Pure handicapping, uninfluenced by the market.
 - **Step 2 — BET** (same model, now shown odds + bankroll): takes its own step-1 prediction
-  + confidence + the 1X2 odds + current bankroll + 25% cap → `{pick, stake, p_revised}`
-  **or pass**. The market price is treated as EVIDENCE: the model must reconcile its blind
-  forecast with the line and state a *revised* probability for its pick, and the negative-EV
-  guard (`MIN_BET_EV`) runs on that revised number. The revised probability is persisted on
-  the bet, so the report can measure each model's market-update behaviour (how far it moves
-  toward the line, and whether moving helped).
+  + confidence + the 1X2 odds + current bankroll + 25% cap → a complete revised
+  `{p_home, p_draw, p_away}` distribution plus `{pick, stake}` **or pass**. The market price
+  is treated as EVIDENCE: the model must reconcile its blind forecast with the line across
+  all three outcomes. The engine calculates EV for all three, then validates only the
+  model's requested pick; it never substitutes another outcome. The full distribution is
+  persisted so the report can measure market updating and post-market calibration. A
+  non-pass without a valid complete distribution is retried once, then fails closed to a pass.
+
+Every new prediction and bet also persists an explicit experiment phase, prompt/rules
+version, requested model ID, OpenRouter generation ID, and Git revision. Bets additionally
+store the bookmaker + capture timestamp of the exact odds snapshot shown at Step 2. These
+fields are observational only: they make phase comparisons and report claims reproducible
+without changing the model's pick or the engine's final action.
+
+The `bet` row preserves both sides of deterministic enforcement: `requested_*` is the
+model's parsed pick, stake, and revised probability before guards; `pick/stake` is the
+final action used by settlement. `engine_adjustment` records why they differ (`ev_guard`,
+`kelly_cap`, `stake_cap`, `exposure_cap`, …). The exact provider response remains linked in
+`model_call`.
+
+**Stake protection (Phase 5 — the model owns the bet, the engine is the risk layer).**
+The model states the pick and its preferred stake; the engine validates and sizes it but never
+substitutes a different outcome. A bet stands only when the pick clears a small EV gate at the
+offered odds (`MIN_BET_EV = 0.015`, ~1.5%): a real-but-small edge is the bar, not bare
+positivity — because the floor below lifts any surviving bet to 2% of bankroll, the gate is
+what stops probability-rounding noise from becoming a $20k bet. The final stake is
+`min(requested, half-Kelly ceiling, per-match cap, remaining aggregate exposure)`, then lifted
+to a `MIN_STAKE_FRACTION = 2%` floor so there are no trivial bets (the floor is the one rule
+that may *raise* a stake, itself bounded by the cap and exposure). The Kelly fraction is held
+at HALF at every stage — Kelly assumes *calibrated* probabilities, but these are uncalibrated
+LLM numbers, so half-Kelly is the margin against estimation error and full Kelly is unsafe.
+Late-stage aggression is carried instead by the per-match **cap**, which ramps 25% → 50% by
+the final (`STAGE_MAX_STAKE_FRACTION`) so only a genuinely big edge bets bigger.
+`MAX_AGGREGATE_EXPOSURE = 0.50` caps the total live across a competitor's unsettled matches at
+half its bankroll (best-effort under the sequential timer — the read-then-write is not atomic
+across concurrent manual runs); a bet squeezed to zero becomes a pass. The human challenger
+keeps a simpler flat 25% manual cap (no Kelly, no exposure cap).
+
+The Step-2 prompt frames passing accordingly: back a genuine edge (a real read, not a
+hair-thin gap), and pass ONLY on a true toss-up or where the price already looks right — never
+pass a match you have a real read on, and never invent an edge to bet a fairly-priced one.
+Idle decay supplies the pressure against simply sitting on cash.
 
 Conviction from step 1 is the bridge into step 2 — the stake reflects *how sure* it was.
 Hiding odds until step 2 means an agent disagreeing with the bookies does so on football

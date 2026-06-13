@@ -148,6 +148,12 @@ class Prediction(BaseModel):
     # feeds the report's factor-attribution analysis (which signals each model
     # weighs, and which correlate with being right).
     key_factors: list[str] | None = None
+    # Experiment provenance. Nullable so pre-versioning rows remain readable.
+    experiment_phase: str | None = None
+    prompt_version: str | None = None
+    requested_model_id: str | None = None
+    call_generation_id: str | None = None
+    git_commit: str | None = None
     created_at: datetime
 
     @property
@@ -168,18 +174,47 @@ class Bet(BaseModel):
     # A stake is real money: never negative, never NaN/inf (which JSON parsing lets through).
     stake: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     odds_at_bet: float | None = None  # decimal odds for the pick at bet time
-    # The model's REVISED probability that its pick wins, stated at the bet step after
-    # reconciling its blind Step-1 forecast with the market price. The negative-EV guard
-    # runs on this number (the Step-1 distribution stays a pure pre-market artifact);
-    # storing both sides lets the report measure each model's market-update behaviour.
-    # None on passes, human-challenger bets, and rows from before the field existed.
+    # Compatibility field: the selected pick's component of the complete revised
+    # distribution. None on passes, human-challenger bets, and legacy rows.
     p_revised: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Complete normalized post-market 1X2 belief. Phase-4 automated decisions populate
+    # all three even on a voluntary pass; older and human rows remain nullable.
+    p_home_revised: float | None = Field(default=None, ge=0.0, le=1.0)
+    p_draw_revised: float | None = Field(default=None, ge=0.0, le=1.0)
+    p_away_revised: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Parsed action before deterministic engine enforcement. The verbatim JSON remains in
+    # model_call.response_text; these normalized fields make requested-vs-final analysis
+    # queryable without reparsing provider output. Nullable for legacy/eliminated rows.
+    requested_pick: Outcome | None = None
+    requested_stake: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    requested_p_revised: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Why the final pick/stake differs from the requested action, when it does.
+    # Current values: ev_guard, kelly_cap, stake_cap, exposure_cap, invalid_request,
+    # missing_revised_distribution, invalid_revised_distribution, eliminated.
+    engine_adjustment: str | None = None
     reasoning: str = ""
+    # Experiment provenance. `odds_*` identifies the exact composite-key snapshot.
+    experiment_phase: str | None = None
+    prompt_version: str | None = None
+    rules_version: str | None = None
+    requested_model_id: str | None = None
+    call_generation_id: str | None = None
+    git_commit: str | None = None
+    odds_snapshot_bookmaker: str | None = None
+    odds_snapshot_captured_at: datetime | None = None
     created_at: datetime
 
     @property
     def is_pass(self) -> bool:
         return self.pick is None or self.stake <= 0
+
+    @property
+    def has_revised_distribution(self) -> bool:
+        return None not in (
+            self.p_home_revised,
+            self.p_draw_revised,
+            self.p_away_revised,
+        )
 
 
 class Settlement(BaseModel):

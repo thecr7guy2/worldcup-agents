@@ -27,8 +27,9 @@ crucially — made before odds are shown, so market-copying cannot contaminate i
       the new build.
 
 ## Still out of scope (future)
-- Brier of `p_revised` vs blind `p` to validate the market step (needs Phase-2 bets first;
-  0 exist yet).
+- Brier of the Phase-4 complete revised distribution vs blind `p` to validate whether
+  market reconciliation improves calibration. The required fields now exist; this should
+  remain a report/analysis slice rather than changing live betting behavior.
 
 ## Acceptance
 - `brier` board prints per-model average Brier (lower=better) + graded count, ordered.

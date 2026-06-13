@@ -205,6 +205,13 @@ export interface BoardEntry {
     pick: string | null;
     stake: number;
     odds_at_bet: number | null;
+    p_revised: number | null;
+    p_home_revised: number | null;
+    p_draw_revised: number | null;
+    p_away_revised: number | null;
+    requested_pick: string | null;
+    requested_stake: number | null;
+    engine_adjustment: string | null;
     reasoning: string;
   } | null;
   settlement: { result: string; payout: number; pnl: number } | null;

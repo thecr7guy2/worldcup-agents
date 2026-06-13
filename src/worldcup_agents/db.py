@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS prediction (
     confidence      REAL NOT NULL,                       -- = probability of `winner`
     reasoning       TEXT NOT NULL,
     key_factors     TEXT,                                -- JSON list of short factor tags
+    experiment_phase TEXT,
+    prompt_version   TEXT,
+    requested_model_id TEXT,
+    call_generation_id TEXT,
+    git_commit       TEXT,
     created_at      TEXT NOT NULL,
     PRIMARY KEY (model_name, fixture_id)
 );
@@ -118,7 +123,22 @@ CREATE TABLE IF NOT EXISTS bet (
     stake       REAL NOT NULL DEFAULT 0,
     odds_at_bet REAL,
     p_revised   REAL,                                   -- post-market revised prob for pick
+    p_home_revised REAL,                                -- complete post-market 1X2 belief
+    p_draw_revised REAL,
+    p_away_revised REAL,
+    requested_pick TEXT,                                -- parsed pre-enforcement action
+    requested_stake REAL,
+    requested_p_revised REAL,
+    engine_adjustment TEXT,                             -- ev_guard/stake_cap/etc.
     reasoning   TEXT NOT NULL DEFAULT '',
+    experiment_phase TEXT,
+    prompt_version TEXT,
+    rules_version TEXT,
+    requested_model_id TEXT,
+    call_generation_id TEXT,
+    git_commit TEXT,
+    odds_snapshot_bookmaker TEXT,
+    odds_snapshot_captured_at TEXT,
     created_at  TEXT NOT NULL,
     PRIMARY KEY (model_name, fixture_id)
 );
@@ -281,6 +301,32 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "model_call", "annotations_json", "TEXT")
     _add_column_if_missing(conn, "prediction", "key_factors", "TEXT")
     _add_column_if_missing(conn, "bet", "p_revised", "REAL")
+    _add_column_if_missing(conn, "bet", "p_home_revised", "REAL")
+    _add_column_if_missing(conn, "bet", "p_draw_revised", "REAL")
+    _add_column_if_missing(conn, "bet", "p_away_revised", "REAL")
+    for column in (
+        "experiment_phase",
+        "prompt_version",
+        "requested_model_id",
+        "call_generation_id",
+        "git_commit",
+    ):
+        _add_column_if_missing(conn, "prediction", column, "TEXT")
+    _add_column_if_missing(conn, "bet", "requested_pick", "TEXT")
+    _add_column_if_missing(conn, "bet", "requested_stake", "REAL")
+    _add_column_if_missing(conn, "bet", "requested_p_revised", "REAL")
+    _add_column_if_missing(conn, "bet", "engine_adjustment", "TEXT")
+    for column in (
+        "experiment_phase",
+        "prompt_version",
+        "rules_version",
+        "requested_model_id",
+        "call_generation_id",
+        "git_commit",
+        "odds_snapshot_bookmaker",
+        "odds_snapshot_captured_at",
+    ):
+        _add_column_if_missing(conn, "bet", column, "TEXT")
     # The secret Human Challenger is just another competitor row, flagged so public board
     # views can exclude him while the engine (settlement, decay, accuracy) treats him as a
     # peer. Defaults to 0 so every existing AI row stays a normal competitor.
@@ -549,8 +595,9 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
         "INSERT OR REPLACE INTO prediction "
         "(model_name, fixture_id, winner, p_home, p_draw, p_away, "
         " pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        " predicted_advance, confidence, reasoning, key_factors, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " predicted_advance, confidence, reasoning, key_factors, experiment_phase, "
+        " prompt_version, requested_model_id, call_generation_id, git_commit, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             p.model_name,
             p.fixture_id,
@@ -566,6 +613,11 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
             p.confidence,
             p.reasoning,
             json.dumps(p.key_factors) if p.key_factors else None,
+            p.experiment_phase,
+            p.prompt_version,
+            p.requested_model_id,
+            p.call_generation_id,
+            p.git_commit,
             p.created_at.isoformat(),
         ),
     )
@@ -588,7 +640,8 @@ def get_prediction(
     row = conn.execute(
         "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
         "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        "predicted_advance, confidence, reasoning, key_factors, created_at "
+        "predicted_advance, confidence, reasoning, key_factors, experiment_phase, "
+        "prompt_version, requested_model_id, call_generation_id, git_commit, created_at "
         "FROM prediction WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
     ).fetchone()
@@ -601,8 +654,13 @@ def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
     """Insert or replace one model's Step-2 bet for a fixture (pick=None → pass)."""
     conn.execute(
         "INSERT OR REPLACE INTO bet "
-        "(model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(model_name, fixture_id, pick, stake, odds_at_bet, p_revised, "
+        " p_home_revised, p_draw_revised, p_away_revised, requested_pick, "
+        " requested_stake, requested_p_revised, engine_adjustment, reasoning, "
+        " experiment_phase, prompt_version, rules_version, requested_model_id, "
+        " call_generation_id, git_commit, odds_snapshot_bookmaker, "
+        " odds_snapshot_captured_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             b.model_name,
             b.fixture_id,
@@ -610,7 +668,26 @@ def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
             b.stake,
             b.odds_at_bet,
             b.p_revised,
+            b.p_home_revised,
+            b.p_draw_revised,
+            b.p_away_revised,
+            b.requested_pick.value if b.requested_pick else None,
+            b.requested_stake,
+            b.requested_p_revised,
+            b.engine_adjustment,
             b.reasoning,
+            b.experiment_phase,
+            b.prompt_version,
+            b.rules_version,
+            b.requested_model_id,
+            b.call_generation_id,
+            b.git_commit,
+            b.odds_snapshot_bookmaker,
+            (
+                b.odds_snapshot_captured_at.isoformat()
+                if b.odds_snapshot_captured_at
+                else None
+            ),
             b.created_at.isoformat(),
         ),
     )
@@ -620,14 +697,22 @@ def upsert_bet(conn: sqlite3.Connection, b: Bet) -> None:
 def get_bet(conn: sqlite3.Connection, model_name: str, fixture_id: int) -> Bet | None:
     """Fetch one model's bet for a fixture, or None."""
     row = conn.execute(
-        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, "
-        "created_at FROM bet WHERE model_name = ? AND fixture_id = ?",
+        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, "
+        "p_home_revised, p_draw_revised, p_away_revised, "
+        "requested_pick, requested_stake, requested_p_revised, engine_adjustment, "
+        "reasoning, experiment_phase, prompt_version, rules_version, requested_model_id, "
+        "call_generation_id, git_commit, odds_snapshot_bookmaker, "
+        "odds_snapshot_captured_at, created_at "
+        "FROM bet WHERE model_name = ? AND fixture_id = ?",
         (model_name, fixture_id),
     ).fetchone()
     if not row:
         return None
     d = dict(row)
     d["pick"] = Outcome(d["pick"]) if d["pick"] else None
+    d["requested_pick"] = (
+        Outcome(d["requested_pick"]) if d["requested_pick"] else None
+    )
     return Bet(**d)
 
 
@@ -645,14 +730,22 @@ def consensus_odds(conn: sqlite3.Connection, fixture_id: int) -> OddsSnapshot | 
 def list_bets(conn: sqlite3.Connection, fixture_id: int) -> list[Bet]:
     """Return every persisted bet for a fixture, ordered by model (deterministic)."""
     rows = conn.execute(
-        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, reasoning, "
-        "created_at FROM bet WHERE fixture_id = ? ORDER BY model_name",
+        "SELECT model_name, fixture_id, pick, stake, odds_at_bet, p_revised, "
+        "p_home_revised, p_draw_revised, p_away_revised, "
+        "requested_pick, requested_stake, requested_p_revised, engine_adjustment, "
+        "reasoning, experiment_phase, prompt_version, rules_version, requested_model_id, "
+        "call_generation_id, git_commit, odds_snapshot_bookmaker, "
+        "odds_snapshot_captured_at, created_at "
+        "FROM bet WHERE fixture_id = ? ORDER BY model_name",
         (fixture_id,),
     ).fetchall()
     out: list[Bet] = []
     for row in rows:
         d = dict(row)
         d["pick"] = Outcome(d["pick"]) if d["pick"] else None
+        d["requested_pick"] = (
+            Outcome(d["requested_pick"]) if d["requested_pick"] else None
+        )
         out.append(Bet(**d))
     return out
 
@@ -814,7 +907,8 @@ def list_predictions(conn: sqlite3.Connection) -> list[Prediction]:
     rows = conn.execute(
         "SELECT model_name, fixture_id, winner, p_home, p_draw, p_away, "
         "pred_home_goals, pred_away_goals, exp_home_goals, exp_away_goals, "
-        "predicted_advance, confidence, reasoning, key_factors, created_at "
+        "predicted_advance, confidence, reasoning, key_factors, experiment_phase, "
+        "prompt_version, requested_model_id, call_generation_id, git_commit, created_at "
         "FROM prediction"
     ).fetchall()
     return [_row_to_prediction(dict(row)) for row in rows]

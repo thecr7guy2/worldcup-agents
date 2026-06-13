@@ -205,6 +205,16 @@ def model_bet(
             "pick": bet.pick.value if bet.pick else "pass",
             "stake": bet.stake,
             "odds_at_bet": bet.odds_at_bet,
+            "revised_probabilities": {
+                "home": bet.p_home_revised,
+                "draw": bet.p_draw_revised,
+                "away": bet.p_away_revised,
+            },
+            "requested_pick": (
+                bet.requested_pick.value if bet.requested_pick else "pass"
+            ),
+            "requested_stake": bet.requested_stake,
+            "engine_adjustment": bet.engine_adjustment,
             "reasoning": bet.reasoning,
         }
     finally:
@@ -232,9 +242,13 @@ _EXAMPLE_BET = {
     "pick": "away",
     "stake": 80000.0,
     "odds_at_bet": 5.5,
+    "revised_probabilities": {"home": 0.53, "draw": 0.27, "away": 0.20},
+    "requested_pick": "away",
+    "requested_stake": 80000.0,
+    "engine_adjustment": None,
     "reasoning": (
         "The market overrates Brazil (fair 58% vs my 42%) and underrates Morocco "
-        "(fair 17% vs my 28%). Morocco at 5.5 is +EV (0.28 x 5.5 - 1 = +54%), so I back "
+        "(fair 17% vs my 20%). Morocco at 5.5 is +EV (0.20 x 5.5 - 1 = +10%), so I back "
         "the underdog for value despite predicting a Brazil win."
     ),
 }

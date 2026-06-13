@@ -83,7 +83,48 @@ GROUP_LETTERS = "ABCDEFGHIJKL"  # the 12 groups A..L
 
 # ---- Competition constants (all tunable in one place) ----
 STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
-MAX_STAKE_FRACTION = 0.25  # max fraction of current bankroll riskable per match
+MAX_STAKE_FRACTION = 0.25  # group-stage per-match hard cap (default); the cap ramps by stage
+
+# Stake protection — the engine SHRINKS the model's requested stake toward these limits
+# (full Kelly = EV / (decimal_odds - 1) of bankroll); the only thing that can RAISE a stake is
+# the minimum-bet floor.
+#
+# Kelly fraction is held at HALF-KELLY at every stage — deliberately NOT ramped. Kelly's
+# optimality assumes calibrated probabilities, but these are uncalibrated, self-reported LLM
+# numbers; half-Kelly is the standard margin against that estimation error, and full Kelly on
+# an over-confident final estimate could lose half the bankroll on one bet. Late-stage
+# aggression is carried by the CAP ramp instead, which only lets a genuinely big edge bet
+# bigger — it never amplifies an over-confident number the way a higher Kelly fraction would.
+KELLY_FRACTION = 0.5
+# Per-match hard cap, rising round by round (25% -> 50%): with fewer matches left a strong
+# edge may stake a larger share. Keyed by Stage.value.
+STAGE_MAX_STAKE_FRACTION: dict[str, float] = {
+    "group": 0.25,
+    "round_of_32": 0.30,
+    "round_of_16": 0.35,
+    "quarter_final": 0.40,
+    "semi_final": 0.45,
+    "third_place": 0.45,
+    "final": 0.50,
+}
+# Most of a competitor's bankroll that may be live across ALL its unsettled matches at once.
+MAX_AGGREGATE_EXPOSURE = 0.50
+# Minimum bet floor: when a model CHOOSES to bet (its pick clears the EV guard), the stake is
+# lifted to at least this fraction of bankroll, so there are no trivial bets. The floor is the
+# one rule that can raise a stake above what the model/Kelly asked; it is still bounded by the
+# per-match cap and remaining exposure (it never breaches a hard limit). It only ever applies
+# to a pick that has already cleared MIN_BET_EV, so it lifts real edges, never rounding noise.
+MIN_STAKE_FRACTION = 0.02
+
+
+def stage_kelly_fraction(stage: str) -> float:
+    """Kelly fraction for a stage — half-Kelly everywhere (uncalibrated-probability margin)."""
+    return KELLY_FRACTION
+
+
+def stage_cap_fraction(stage: str) -> float:
+    """Per-match hard-cap fraction for a stage — 25% at the group, rising to 50% by the final."""
+    return STAGE_MAX_STAKE_FRACTION.get(stage, MAX_STAKE_FRACTION)
 IDLE_DECAY = 0.005  # fraction lost on un-staked bankroll per matchday (anti-cowardice)
 BANKRUPT_FLOOR = 10_000.0  # at/below this, the agent is bust
 REBUY_AMOUNT = 100_000.0  # a smaller "second life" granted on bust
@@ -131,12 +172,15 @@ PREDICT_MAX_WORKERS = 6
 # Refresh a cached late update at predict time if it is older than this many minutes, so
 # confirmed lineups that landed since the first (~T-75) fetch are picked up before the lock.
 LATE_UPDATE_REFRESH_MIN = 20.0
-# Minimum expected value for a bet to stand: EV = p_revised(pick) * decimal_odds - 1,
-# judged at the model's REVISED (post-market-reconciliation) probability — falling back to
-# its Step-1 probability when no revised number was given. A bet below this edge is
-# overridden to a pass. Set above zero so a bet needs a CLEAR edge after weighing the
-# market, not a rounding artifact of a flat blind forecast.
-MIN_BET_EV = 0.05
+# Minimum expected value for a bet to stand. The engine calculates EV for all three outcomes
+# from the complete revised distribution, then validates the model's requested pick:
+# EV = p_revised(pick) * decimal_odds - 1. Set to 0.015 (a ~1.5% edge): a real-but-small edge
+# is the bar to bet, NOT bare positivity. This matters because the minimum-bet floor lifts any
+# surviving bet to 2% of bankroll — so without this gate, rounding noise (a sub-1% "edge" that
+# is really just probability imprecision) would become a $20k bet. The gate keeps action on
+# genuine reads while refusing to stake noise. A non-pass without a valid distribution is
+# retried once, then fails closed.
+MIN_BET_EV = 0.015
 # Near-kickoff odds freshness: when a fixture is inside the late-update/bet horizon and its
 # newest consensus snapshot is older than this, the tick triggers ONE targeted odds poll
 # (1 API credit, covers all events). Keeps bets from being placed into a line up to 6 hours

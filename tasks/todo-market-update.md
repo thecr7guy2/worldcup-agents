@@ -1,5 +1,11 @@
 # Step-2 market reconciliation (revised probability)
 
+> **SUPERSEDED (Phase 5, 2026-06-13).** This slice's Phase-2 design (single `p_revised`,
+> `MIN_BET_EV` 0.05, blind-forecast fallback) has been replaced. Live behaviour now: a full
+> revised 1X2 distribution, `MIN_BET_EV = 0`, retry-once-then-fail-closed, and half-Kelly +
+> exposure stake protection. See `todo-hybrid-risk-engine.md` and DESIGN §2. Kept as the
+> historical record of why the revised-probability step exists.
+
 ## Problem (observed after matchdays 1–3)
 
 All seven agents predicted the favorite and bet the underdog on every fixture with a
@@ -18,7 +24,8 @@ favorite bets. Root cause is mechanical, not behavioral:
 
 - [x] Step-2 prompt: market framed as evidence; model must reconcile its blind forecast
       with the line and output `p_revised` (probability its pick wins, post-market).
-- [x] EV guard runs on `p_revised` (fallback: Step-1 probability when missing/invalid).
+- [x] Phase 2 EV guard runs on `p_revised` (historical fallback: Step-1 probability when
+      missing/invalid).
 - [x] `MIN_BET_EV` 0.0 → 0.05 (a bet needs a clear edge, not a rounding artifact).
 - [x] Persist `p_revised` on `bet` (schema + additive migration + round-trip helpers +
       Pydantic model) — report can measure each model's market-update behaviour.
@@ -34,7 +41,7 @@ favorite bets. Root cause is mechanical, not behavioral:
 - Step 1 untouched: still blind, still the accuracy-board artifact.
 - Shared briefing untouched; both system prompts remain identical across all 7 models.
 - The change is additive: legacy bet rows load (`p_revised` NULL), human-challenger
-  bets unaffected.
+  betting behavior is unaffected.
 
 ## Acceptance criteria
 
@@ -42,16 +49,36 @@ favorite bets. Root cause is mechanical, not behavioral:
   short-priced favorite (impossible before).
 - A bet whose revised probability fails the threshold is auto-passed with the EV note
   naming "revised probability" as the basis.
-- A response with no/invalid `p_revised` behaves exactly like the old guard (Step-1
-  fallback), tagged "(no revised given)".
+- Phase 2 only: a response with no/invalid `p_revised` used the old Step-1 fallback.
 - Live DB migrates additively; existing rows and the web app keep working.
 
 ## Phase marker (for the tech report)
 
-Fixtures up to and including 105 (Canada–BIH, 2026-06-12) were decided under the old
-blind-EV regime — treat as Phase 1 (shared-miscalibration mechanism). Fixtures predicted
-after 2026-06-13 ~01:50 UTC run under the revised-probability regime — Phase 2
-(market-update skill). In `bet` rows, Phase 2 LLM bets carry non-NULL `p_revised`.
+Fixtures 103-106 were decided under the old blind-EV regime — treat them as Phase 1
+(shared-miscalibration mechanism). Phase-2 rows explicitly store
+`experiment_phase = 'phase_2_market_reconciliation'`; use that field instead of a
+deployment timestamp. Do not use non-NULL `p_revised` as the Phase-2 marker because a
+pass can legitimately persist no selected revised probability. Later phases carry their
+own explicit labels.
+
+The prompt/rules labels, requested model ID, OpenRouter generation ID, Git revision, and
+exact odds-snapshot identifiers are also persisted for new rows. See
+`tasks/todo-experiment-provenance.md`.
+
+## Phase 3 hardening
+
+The Phase-2 fallback was intentionally removed after requested-vs-final audit fields
+landed. A non-pass with missing or invalid `p_revised` now fails closed with
+`engine_adjustment = missing_revised_probability | invalid_revised_probability`.
+This historical Phase-3 rule prevented malformed output from re-entering the flat
+blind-EV regime; Phase 4 supersedes it with full-distribution validation.
+
+## Phase 4 full distribution
+
+Step 2 now requires `p_home_revised`, `p_draw_revised`, and `p_away_revised`. Small
+rounding differences are normalized; missing, non-finite, negative, or materially
+mis-summed distributions fail closed. The engine calculates EV for all three outcomes
+but validates only the model's requested pick, preserving model ownership of the bet.
 
 ## Results (2026-06-13)
 

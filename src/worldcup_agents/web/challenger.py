@@ -30,6 +30,13 @@ from pydantic import BaseModel, Field
 
 from .. import db
 from ..config import BET_LEAD_HOURS, MAX_STAKE_FRACTION, settings
+from ..experiment import (
+    EXPERIMENT_PHASE,
+    HUMAN_BET_VERSION,
+    HUMAN_FORECAST_VERSION,
+    HUMAN_RULES_VERSION,
+    git_commit,
+)
 from ..models import Bet, MatchStatus, Outcome, Prediction
 from . import stats
 
@@ -270,6 +277,10 @@ def predict(body: PredictBody, name: str = Depends(require_challenger)) -> dict:
             pred_away_goals=body.away_goals if has_score else None,
             predicted_advance=body.advances if is_knockout else None,
             reasoning=body.reasoning.strip(),
+            experiment_phase=EXPERIMENT_PHASE,
+            prompt_version=HUMAN_FORECAST_VERSION,
+            requested_model_id="human",
+            git_commit=git_commit(),
             created_at=_now(),
         )
         db.upsert_prediction(conn, pred)
@@ -303,11 +314,19 @@ def place_bet(body: BetBody, name: str = Depends(require_challenger)) -> dict:
             )
 
         comp = db.ensure_challenger(conn, name)
-        cap = comp.bankroll * MAX_STAKE_FRACTION
+        cap = comp.bankroll * MAX_STAKE_FRACTION  # human plays a flat 25% manual ruleset
 
         raw_pick = body.pick.strip().lower()
         pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
         stake = body.stake if math.isfinite(body.stake) and body.stake > 0 else 0.0
+        requested_pick = pick
+        requested_stake = stake
+        engine_adjustment = (
+            "invalid_request"
+            if raw_pick not in {"home", "draw", "away", "pass"}
+            else None
+        )
+        odds = db.consensus_odds(conn, fx.id)
 
         if pick is None or stake <= 0:
             result = Bet(
@@ -316,11 +335,20 @@ def place_bet(body: BetBody, name: str = Depends(require_challenger)) -> dict:
                 pick=None,
                 stake=0.0,
                 odds_at_bet=None,
+                requested_pick=requested_pick,
+                requested_stake=requested_stake,
+                engine_adjustment=engine_adjustment,
                 reasoning=body.reasoning.strip(),
+                experiment_phase=EXPERIMENT_PHASE,
+                prompt_version=HUMAN_BET_VERSION,
+                rules_version=HUMAN_RULES_VERSION,
+                requested_model_id="human",
+                git_commit=git_commit(),
+                odds_snapshot_bookmaker=odds.bookmaker if odds else None,
+                odds_snapshot_captured_at=odds.captured_at if odds else None,
                 created_at=_now(),
             )
         else:
-            odds = db.consensus_odds(conn, fx.id)
             if odds is None:
                 raise HTTPException(
                     status_code=409, detail="No odds available for this match yet"
@@ -330,6 +358,8 @@ def place_bet(body: BetBody, name: str = Depends(require_challenger)) -> dict:
                 Outcome.DRAW: odds.draw,
                 Outcome.AWAY: odds.away,
             }[pick]
+            if stake > cap:
+                engine_adjustment = "stake_cap"
             stake = min(stake, cap)  # enforce the cap regardless of what was sent
             result = Bet(
                 model_name=name,
@@ -337,7 +367,17 @@ def place_bet(body: BetBody, name: str = Depends(require_challenger)) -> dict:
                 pick=pick,
                 stake=round(stake, 2),
                 odds_at_bet=odds_for,
+                requested_pick=requested_pick,
+                requested_stake=requested_stake,
+                engine_adjustment=engine_adjustment,
                 reasoning=body.reasoning.strip(),
+                experiment_phase=EXPERIMENT_PHASE,
+                prompt_version=HUMAN_BET_VERSION,
+                rules_version=HUMAN_RULES_VERSION,
+                requested_model_id="human",
+                git_commit=git_commit(),
+                odds_snapshot_bookmaker=odds.bookmaker,
+                odds_snapshot_captured_at=odds.captured_at,
                 created_at=_now(),
             )
         db.upsert_bet(conn, result)
