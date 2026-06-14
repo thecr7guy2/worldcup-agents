@@ -11,17 +11,18 @@ from pathlib import Path
 # Phase 2 introduced post-market p_revised with a blind-forecast fallback (deployed live).
 # Phase 3 (dev only, never live) failed closed when a non-pass omitted a valid p_revised.
 # Phase 4 (dev only, never live) required a complete post-market 1X2 distribution.
-# Phase 5 keeps the complete distribution + model-owned pick, replaces the blind fallback with
-#   a single retry, and adds engine-enforced stake protection: a HALF-Kelly ceiling (held flat
-#   — uncalibrated probabilities make full Kelly unsafe), a per-match cap that ramps 25% -> 50%
-#   by the final, an aggregate-exposure cap (50%), a 2% minimum-bet floor, and a 1.5% EV gate so
-#   the floor only ever lifts real edges, not rounding noise. The bet prompt reframes passing:
-#   bet a genuine edge, pass only on a true toss-up.
-EXPERIMENT_PHASE = "phase_5_hybrid_risk_engine"
+# Phase 5 used a complete revised distribution, EV gate, half-Kelly ceiling, minimum floor,
+# and stage-ramped caps. Live results still produced zero favorite bets because flat blind
+# probabilities and payout-seeking narratives made longshots look attractive.
+# Phase 6 removes the probability machinery from Step 2. The immutable blind forecast defines
+# eligibility: a pick must sit within 10 points of the top read. Odds choose among eligible
+# outcomes; the model requests a fixed conviction tier; the engine only enforces eligibility,
+# the stage tier ceiling, and aggregate exposure. Passing is explicitly normal.
+EXPERIMENT_PHASE = "phase_6_coherent_tier_betting"
 
-FORECAST_PROMPT_VERSION = "forecast_v2_distribution"  # Step 1 unchanged
-BET_PROMPT_VERSION = "bet_v7_bet_your_edge_ev_gated"
-BETTING_RULES_VERSION = "rules_v7_halfkelly_capramp_minfloor2pct_exposure50_ev_015"
+FORECAST_PROMPT_VERSION = "forecast_v3_calibrated_spread"
+BET_PROMPT_VERSION = "bet_v9_coherence_voice_fixed_tiers"
+BETTING_RULES_VERSION = "rules_v8_gap10_tiers_stage20_25_30_exposure50"
 
 HUMAN_FORECAST_VERSION = "human_forecast_v1"
 HUMAN_BET_VERSION = "human_bet_v1"

@@ -1,12 +1,14 @@
-"""The secret "Human Challenger" — a write surface letting one human bet alongside the 7
-AIs under the SAME rules (DESIGN §5), hidden from the public site until revealed.
+"""The secret "Human Challenger" — a write surface letting one human compete alongside the
+7 AIs, hidden from the public site until revealed.
 
 This is the ONLY mutating part of the web tier. It is deliberately narrow:
 
 - Every write touches ONLY the challenger's own competitor row (`settings.challenger_name`);
   it can never move an AI's bankroll or write another model's prediction/bet.
-- Two steps mirror the AIs exactly: PREDICT with odds hidden, then BET with odds shown. The
-  server withholds a fixture's odds until a prediction for it exists, so the odds-hidden
+- Two steps mirror the AI information flow: PREDICT with odds hidden, then BET with odds shown.
+  The human keeps a simpler flat 25% manual stake cap rather than the AI-only probability
+  eligibility and tier mechanism. The server withholds a fixture's odds until a prediction
+  for it exists, so the odds-hidden
   parity is enforced here, not just in the UI.
 - Bets lock at `kickoff - BET_LEAD_HOURS` — the same instant the AIs lock — which also makes
   in-match betting impossible.
@@ -29,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from .. import db
-from ..config import BET_LEAD_HOURS, MAX_STAKE_FRACTION, settings
+from ..config import BET_LEAD_HOURS, HUMAN_MAX_STAKE_FRACTION, settings
 from ..experiment import (
     EXPERIMENT_PHASE,
     HUMAN_BET_VERSION,
@@ -238,7 +240,7 @@ def state(name: str = Depends(require_challenger)) -> dict:
             )
         return {
             "name": name,
-            "max_stake_fraction": MAX_STAKE_FRACTION,
+            "max_stake_fraction": HUMAN_MAX_STAKE_FRACTION,
             "standing": standing,
             "open_fixtures": open_fixtures,
         }
@@ -291,7 +293,7 @@ def predict(body: PredictBody, name: str = Depends(require_challenger)) -> dict:
         return {
             "ok": True,
             "bankroll": comp.bankroll,
-            "cap": comp.bankroll * MAX_STAKE_FRACTION,
+            "cap": comp.bankroll * HUMAN_MAX_STAKE_FRACTION,
             "open_stake": open_stake,
             "open_count": open_count,
             "odds": _odds_dict(conn, fx.id),
@@ -314,7 +316,7 @@ def place_bet(body: BetBody, name: str = Depends(require_challenger)) -> dict:
             )
 
         comp = db.ensure_challenger(conn, name)
-        cap = comp.bankroll * MAX_STAKE_FRACTION  # human plays a flat 25% manual ruleset
+        cap = comp.bankroll * HUMAN_MAX_STAKE_FRACTION
 
         raw_pick = body.pick.strip().lower()
         pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None

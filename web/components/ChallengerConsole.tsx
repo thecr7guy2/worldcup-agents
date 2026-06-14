@@ -418,7 +418,11 @@ function BetStep({ fx, cap, onDone }: { fx: ChallengerFixture; cap: number; onDo
           overCap ? "border-down" : "border-line-strong"
         }`}
       />
-      {overCap && <p className="mono mt-1 text-[11px] text-down">Above the 25% cap — will be clamped.</p>}
+      {overCap && (
+        <p className="mono mt-1 text-[11px] text-down">
+          Above the displayed cap — will be clamped.
+        </p>
+      )}
       {err && <p className="mono mt-2 text-[11px] text-down">{err}</p>}
 
       <div className="mt-4 flex gap-2">

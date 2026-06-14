@@ -21,7 +21,6 @@ from ..models import Competitor, Fixture, MatchStatus, Team
 from . import agents_meta
 from .flags import code_for, iso_for
 
-
 # ---- small helpers -------------------------------------------------------
 
 
@@ -63,9 +62,7 @@ def team_side(team: Team | None, label: str | None) -> dict:
 # ---- fixtures ------------------------------------------------------------
 
 
-def serialize_fixture(
-    fx: Fixture, teams: dict[int, Team], odds: dict | None
-) -> dict:
+def serialize_fixture(fx: Fixture, teams: dict[int, Team], odds: dict | None) -> dict:
     """A fixture flattened for the UI: both sides resolved, odds + result attached."""
     home = team_side(teams.get(fx.home_id) if fx.home_id else None, fx.home_label)
     away = team_side(teams.get(fx.away_id) if fx.away_id else None, fx.away_label)
@@ -210,7 +207,7 @@ def _archetype(
         return "Rookie"
     total_decisions = bets_placed + passes
     pass_rate = passes / total_decisions if total_decisions else 0.0
-    aggressive = avg_stake_pct > 0.5 * MAX_STAKE_FRACTION  # >12.5% of bankroll
+    aggressive = avg_stake_pct > 0.5 * MAX_STAKE_FRACTION  # >10% of bankroll
     accurate = hit_rate >= 0.55
     profitable = roi > 0
     if accurate and profitable:
@@ -328,10 +325,7 @@ def list_competitors(conn: sqlite3.Connection) -> list[dict]:
     """Every competitor's character sheet, in bankroll order."""
     acc = _accuracy_index(conn)
     usage = _usage_index(conn)
-    return [
-        competitor_card(conn, c, acc, usage)
-        for c in db.list_competitors(conn)
-    ]
+    return [competitor_card(conn, c, acc, usage) for c in db.list_competitors(conn)]
 
 
 def competitor_detail(
@@ -348,7 +342,11 @@ def competitor_detail(
     # A hidden Human Challenger must never surface on a public (include_human=False) view,
     # even by a direct name lookup, until CHALLENGER_PUBLIC is flipped. His own authenticated
     # /state passes include_human=True, so this only blocks the public competitor route.
-    if not include_human and not CHALLENGER_PUBLIC and model_name in db.human_names(conn):
+    if (
+        not include_human
+        and not CHALLENGER_PUBLIC
+        and model_name in db.human_names(conn)
+    ):
         return None
     card = competitor_card(
         conn, c, _accuracy_index(conn, include_human=include_human), _usage_index(conn)
@@ -382,8 +380,12 @@ def competitor_detail(
         if fx:
             h = team_side(teams.get(fx.home_id) if fx.home_id else None, fx.home_label)
             a = team_side(teams.get(fx.away_id) if fx.away_id else None, fx.away_label)
-            fx_label = {"home": h, "away": a, "stage": fx.stage.value,
-                        "kickoff": fx.kickoff.isoformat()}
+            fx_label = {
+                "home": h,
+                "away": a,
+                "stage": fx.stage.value,
+                "kickoff": fx.kickoff.isoformat(),
+            }
         log.append(
             {
                 "fixture_id": r["fixture_id"],
@@ -476,11 +478,17 @@ def overview(conn: sqlite3.Connection) -> dict:
     last_kick = kickoffs[-1] if kickoffs else None
 
     now = _now_utc()
-    upcoming = [fx for fx in fixtures if fx.kickoff >= now and fx.status == MatchStatus.SCHEDULED]
+    upcoming = [
+        fx
+        for fx in fixtures
+        if fx.kickoff >= now and fx.status == MatchStatus.SCHEDULED
+    ]
     upcoming.sort(key=lambda fx: fx.kickoff)
     teams = _team_index(conn)
     next_fx = (
-        serialize_fixture(upcoming[0], teams, _consensus_odds_dict(conn, upcoming[0].id))
+        serialize_fixture(
+            upcoming[0], teams, _consensus_odds_dict(conn, upcoming[0].id)
+        )
         if upcoming
         else None
     )

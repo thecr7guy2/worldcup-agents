@@ -1,5 +1,9 @@
 # Slice: Gambler loop — Step 1 PREDICT + Step 2 BET (the 5 competitors)
 
+> **Historical implementation slice.** The original free-dollar-stake and flat 25% rules
+> described below were superseded by Phase 6. Current behavior is documented in DESIGN §2
+> and `tasks/todo-hybrid-risk-engine.md`.
+
 **Status:** IN PROGRESS. **Executor:** Opus.
 **Read first:** DESIGN §2 (two-step agent), §5 (gambler model), §6 (leaderboards). Intelligence
 layer (briefings + post-match) is done — see `tasks/todo-intelligence.md`.

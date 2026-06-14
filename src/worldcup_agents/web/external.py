@@ -92,7 +92,9 @@ def _matches(
 def list_matches(
     request: Request,
     date: str | None = Query(default=None, description="UTC date YYYY-MM-DD"),
-    team: str | None = Query(default=None, description="team name (substring, case-insensitive)"),
+    team: str | None = Query(
+        default=None, description="team name (substring, case-insensitive)"
+    ),
     stage: str | None = Query(default=None, description="group | round_of_32 | ..."),
 ) -> dict:
     """The schedule so a caller can find a match by date + team and read off its fixture_id."""
@@ -147,10 +149,14 @@ def _resolve_fixture(
 @router.get("/bet")
 def model_bet(
     request: Request,
-    model: str = Query(..., description="competitor / LLM display name (case-insensitive)"),
+    model: str = Query(
+        ..., description="competitor / LLM display name (case-insensitive)"
+    ),
     fixture: int | None = Query(default=None, description="our fixture id (optional)"),
     date: str | None = Query(default=None, description="UTC date YYYY-MM-DD"),
-    team: str | None = Query(default=None, description="a team in the match (substring)"),
+    team: str | None = Query(
+        default=None, description="a team in the match (substring)"
+    ),
 ) -> dict:
     """One models final bet: pick, stake, reasoning, plus date + teams so the match is
     identifiable without our internal id. Select by fixture id, by date+team, or omit all
@@ -238,18 +244,17 @@ _EXAMPLE_BET = {
     "status": "scheduled",
     "match": "Brazil vs Morocco",
     "predicted_winner": "home",
-    "confidence": 0.42,
-    "pick": "away",
-    "stake": 80000.0,
-    "odds_at_bet": 5.5,
-    "revised_probabilities": {"home": 0.53, "draw": 0.27, "away": 0.20},
-    "requested_pick": "away",
-    "requested_stake": 80000.0,
+    "confidence": 0.58,
+    "pick": "home",
+    "stake": 200000.0,
+    "odds_at_bet": 1.72,
+    "revised_probabilities": {"home": None, "draw": None, "away": None},
+    "requested_pick": "home",
+    "requested_stake": 200000.0,
     "engine_adjustment": None,
     "reasoning": (
-        "The market overrates Brazil (fair 58% vs my 42%) and underrates Morocco "
-        "(fair 17% vs my 20%). Morocco at 5.5 is +EV (0.20 x 5.5 - 1 = +10%), so I back "
-        "the underdog for value despite predicting a Brazil win."
+        "Brazil's midfield control and stronger attacking depth make the home win my clear "
+        "football call. The price is short but still acceptable for a high-conviction 20% tier."
     ),
 }
 

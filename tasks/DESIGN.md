@@ -54,13 +54,10 @@ separating football judgment from money judgment, so the payout never biases the
 - **Step 1 — PREDICT** (odds hidden): reads the briefing → `{winner, confidence, reasoning}`.
   Pure handicapping, uninfluenced by the market.
 - **Step 2 — BET** (same model, now shown odds + bankroll): takes its own step-1 prediction
-  + confidence + the 1X2 odds + current bankroll + 25% cap → a complete revised
-  `{p_home, p_draw, p_away}` distribution plus `{pick, stake}` **or pass**. The market price
-  is treated as EVIDENCE: the model must reconcile its blind forecast with the line across
-  all three outcomes. The engine calculates EV for all three, then validates only the
-  model's requested pick; it never substitutes another outcome. The full distribution is
-  persisted so the report can measure market updating and post-market calibration. A
-  non-pass without a valid complete distribution is retried once, then fails closed to a pass.
+  + the 1X2 odds + current bankroll → an eligible `{pick, stake_pct}` **or pass**. An outcome
+  is eligible only when its immutable Step-1 probability is within 10 percentage points of
+  the model's top read. Odds can choose among those football-plausible outcomes, but cannot
+  turn a clearly unlikely longshot into a bet. The engine never substitutes a pick.
 
 Every new prediction and bet also persists an explicit experiment phase, prompt/rules
 version, requested model ID, OpenRouter generation ID, and Git revision. Bets additionally
@@ -69,47 +66,43 @@ fields are observational only: they make phase comparisons and report claims rep
 without changing the model's pick or the engine's final action.
 
 The `bet` row preserves both sides of deterministic enforcement: `requested_*` is the
-model's parsed pick, stake, and revised probability before guards; `pick/stake` is the
-final action used by settlement. `engine_adjustment` records why they differ (`ev_guard`,
-`kelly_cap`, `stake_cap`, `exposure_cap`, …). The exact provider response remains linked in
-`model_call`.
+model's parsed pick and tier-derived dollar request before guards; `pick/stake` is the final
+action used by settlement. `engine_adjustment` records why they differ (`ineligible_pick`,
+`invalid_tier`, `stage_cap`, `exposure_cap`, …). The exact provider response remains linked
+in `model_call`. Legacy revised-probability columns remain nullable for historical rows.
 
-**Stake protection (Phase 5 — the model owns the bet, the engine is the risk layer).**
-The model states the pick and its preferred stake; the engine validates and sizes it but never
-substitutes a different outcome. A bet stands only when the pick clears a small EV gate at the
-offered odds (`MIN_BET_EV = 0.015`, ~1.5%): a real-but-small edge is the bar, not bare
-positivity — because the floor below lifts any surviving bet to 2% of bankroll, the gate is
-what stops probability-rounding noise from becoming a $20k bet. The final stake is
-`min(requested, half-Kelly ceiling, per-match cap, remaining aggregate exposure)`, then lifted
-to a `MIN_STAKE_FRACTION = 2%` floor so there are no trivial bets (the floor is the one rule
-that may *raise* a stake, itself bounded by the cap and exposure). The Kelly fraction is held
-at HALF at every stage — Kelly assumes *calibrated* probabilities, but these are uncalibrated
-LLM numbers, so half-Kelly is the margin against estimation error and full Kelly is unsafe.
-Late-stage aggression is carried instead by the per-match **cap**, which ramps 25% → 50% by
-the final (`STAGE_MAX_STAKE_FRACTION`) so only a genuinely big edge bets bigger.
-`MAX_AGGREGATE_EXPOSURE = 0.50` caps the total live across a competitor's unsettled matches at
-half its bankroll (best-effort under the sequential timer — the read-then-write is not atomic
-across concurrent manual runs); a bet squeezed to zero becomes a pass. The human challenger
-keeps a simpler flat 25% manual cap (no Kelly, no exposure cap).
+**Coherent tier betting (Phase 6).** The immutable odds-hidden distribution is the
+football guardrail. Let `p_top` be the highest Step-1 probability; outcome `i` is bettable
+when `p_top - p_i <= 0.10`. The model may choose any eligible outcome after seeing the odds,
+or pass. This preserves a value bet on a genuine close second (`40/25/35`) while blocking a
+large wager on an outcome the same model rated clearly unlikely (`53/26/21`).
 
-The Step-2 prompt frames passing accordingly: back a genuine edge (a real read, not a
-hair-thin gap), and pass ONLY on a true toss-up or where the price already looks right — never
-pass a match you have a real read on, and never invent an edge to bet a fairly-priced one.
-Idle decay supplies the pressure against simply sitting on cash.
+Stake sizing uses fixed conviction tiers instead of Kelly or an EV formula:
+
+- Group: 5%, 10%, 15%, 20%.
+- Round of 32 / Round of 16: add 25%.
+- Quarterfinal onward: add 30%.
+
+The engine validates the tier, applies the stage ceiling, and trims only for the existing
+50% aggregate-exposure budget. There is no revised probability, EV gate, market blend,
+Kelly sizing, or minimum stake floor. Passing is explicitly normal when no eligible price
+deserves money; the prompt no longer pressures agents to bet every real lean.
 
 Conviction from step 1 is the bridge into step 2 — the stake reflects *how sure* it was.
 Hiding odds until step 2 means an agent disagreeing with the bookies does so on football
 merit, not because it saw the price first.
 
-> **Why the revised probability exists (added 2026-06-13, after 3 matchdays):** blind
+> **Historical Phase 2-5 note:** blind
 > Step-1 distributions proved systematically FLATTER than the market — every model landed
 > near ~45/30/25 regardless of matchup, ~10–15 points under the market on clear favorites.
 > With the EV guard judged at those blind numbers, no short-priced favorite could ever be
 > bet (p × odds < 1 by construction) while every underdog showed a phantom 15–35% edge —
 > so all seven agents predicted the favorite and bet the dog, every match with a clear
 > favorite (see fixtures 103/105 vs the near-even 104). Judging EV at a post-market revised
-> probability restores favorite bets and makes "how much do you trust yourself vs the
-> market" the model-attributable skill under test. See `tasks/todo-market-update.md`.
+> probability was introduced to repair that issue, followed by EV/Kelly risk controls.
+> Production Phase 5 still produced zero favorite bets across its first 28 decisions:
+> models used the price to narrate longshot value against their own read. Phase 6 therefore
+> replaces the probability machinery with the simple Step-1 eligibility rule above.
 
 ### Scoring / Settlement Engine
 Settles bets against real results, updates both leaderboards.
@@ -198,17 +191,16 @@ leaderboard is meaningless.
 
 ## 5. The gambler model (primary mechanic)
 
-Each agent is a gambler with a bankroll. The math itself punishes chalk and rewards
-correctly-seen upsets — no hand-tuned anti-favorite rules needed.
+Each agent is a bettor with a bankroll. Football judgment determines what is plausible;
+market prices determine which plausible outcome is worth backing.
 
 - **Starting bankroll:** $1,000,000 each.
 - Before each match the agent sees the frozen briefing + **market odds**.
-- The agent chooses predictions **and stake** per market, and **may stake $0 / skip**.
+- The agent chooses an eligible outcome and fixed conviction tier, and may pass.
 - Settle against real odds: longshot hit → bankroll jumps; favorite → barely moves;
   big bet missed → bleeds. "Always pick favorite" stagnates and loses.
-- **Mindset induction:** identical "$1M bankroll, your life depends on growing it, bet big
-  only where you see value, don't gamble every match" system prompt for ALL agents
-  (keeps the experiment fair — only the model differs).
+- **Mindset induction:** identical "grow the bankroll without abandoning your blind football
+  read; large bets are allowed; passing is normal" system prompt for ALL agents.
 
 ### Betting market — WINNER ONLY (v1)
 - **1X2 (match result):** home / draw / away — settled on **90-minute** result.
@@ -227,7 +219,8 @@ correctly-seen upsets — no hand-tuned anti-favorite rules needed.
   below $1M. Tactical passing stays viable; winning-by-cowardice does not. A0 — tune the rate.
 
 ### Bust rule — cap + re-buy
-- **Per-match stake cap:** 25% of current bankroll per market (no round-1 wipeouts).
+- **Per-match stake cap:** fixed tiers with a stage ceiling: 20% in groups, 25% in the
+  round of 32/16, and 30% from the quarterfinals onward.
 - **Bust:** if bankroll drops below a floor (~$10k), grant ONE smaller re-buy ($100k =
   10% of start), flagged as a "second life." Keeps all 5 in the race to the final.
 - **Settlement granularity = the matchday, not the fixture.** A whole UTC day settles as
@@ -238,15 +231,12 @@ correctly-seen upsets — no hand-tuned anti-favorite rules needed.
   is order-free regardless; only the intermediate floor check was order-sensitive.
   `settlement.settle_matchday` is the enforcement point; impact lands a few hours later on
   busy days, a deliberate trade.)
-- **Concurrent exposure = informed, not reserved.** Stakes aren't escrowed, so on a busy
+- **Concurrent exposure = informed and bounded.** Stakes aren't escrowed, so on a busy
   matchday — especially the final group round, where each group's two matches kick off
   *simultaneously* (anti-collusion) — an agent can bet several still-unsettled matches off
-  one bankroll. Rather than reserve stakes (which would impose an arbitrary bet-order cap on
-  truly simultaneous matches), the bet step *tells* the agent its open exposure: "you have
-  $X staked on N other matches still awaiting a result, free bankroll ≈ $Y." A real bettor
-  knows its open positions; sizing against the free balance is then the agent's judgment —
-  the dimension we measure — not a mechanical limit. The per-match 25% cap is unchanged.
-  `db.open_exposure` + `predict._exposure_note` are the touchpoints. (Temporal integrity is
+  one bankroll. The bet step tells the agent its open exposure and the engine caps aggregate
+  unsettled stake at 50% of bankroll. `db.open_exposure` + `predict._exposure_note` are the
+  touchpoints. (Temporal integrity is
   unaffected: bets lock ~0.83h before kickoff and results aren't ingested until ~2.5h after,
   so an agent never sees a simultaneous match's result when betting its sister fixture.)
 
@@ -332,7 +322,7 @@ orchestrator must live on the always-on box, not the dev Mac.
 - **Cutover:** build/test on Mac → deploy + full dry-run on the server a few days BEFORE
   June 11 (opening match = first hard deadline) → run live from the server; keep pushing
   fixes from the Mac and pulling on the server.
-- **A1 — Stake cap 25%, re-buy $100k, floor $10k** — assumed defaults, easy to tune.
+- **A1 — Stage tiers 20/25/30%, re-buy $100k, floor $10k** — current defaults, easy to tune.
 - **A2 — Intelligence agent = Claude** — assumed; swap freely.
 - **A3 — One briefing per match** (not per-agent) — core to fairness.
 

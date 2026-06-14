@@ -174,11 +174,9 @@ class Bet(BaseModel):
     # A stake is real money: never negative, never NaN/inf (which JSON parsing lets through).
     stake: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     odds_at_bet: float | None = None  # decimal odds for the pick at bet time
-    # Compatibility field: the selected pick's component of the complete revised
-    # distribution. None on passes, human-challenger bets, and legacy rows.
+    # Phase 2-5 compatibility fields. Phase 6 uses the immutable Step-1 distribution as an
+    # eligibility gate and leaves all revised-probability fields NULL.
     p_revised: float | None = Field(default=None, ge=0.0, le=1.0)
-    # Complete normalized post-market 1X2 belief. Phase-4 automated decisions populate
-    # all three even on a voluntary pass; older and human rows remain nullable.
     p_home_revised: float | None = Field(default=None, ge=0.0, le=1.0)
     p_draw_revised: float | None = Field(default=None, ge=0.0, le=1.0)
     p_away_revised: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -188,9 +186,9 @@ class Bet(BaseModel):
     requested_pick: Outcome | None = None
     requested_stake: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
     requested_p_revised: float | None = Field(default=None, ge=0.0, le=1.0)
-    # Why the final pick/stake differs from the requested action, when it does.
-    # Current values: ev_guard, kelly_cap, stake_cap, exposure_cap, invalid_request,
-    # missing_revised_distribution, invalid_revised_distribution, eliminated.
+    # Why the final pick/stake differs from the requested action, when it does. Phase 6:
+    # ineligible_pick, invalid_tier, invalid_request, stage_cap, exposure_cap, eliminated.
+    # Older phase values remain readable.
     engine_adjustment: str | None = None
     reasoning: str = ""
     # Experiment provenance. `odds_*` identifies the exact composite-key snapshot.

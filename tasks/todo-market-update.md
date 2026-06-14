@@ -1,10 +1,9 @@
 # Step-2 market reconciliation (revised probability)
 
-> **SUPERSEDED (Phase 5, 2026-06-13).** This slice's Phase-2 design (single `p_revised`,
-> `MIN_BET_EV` 0.05, blind-forecast fallback) has been replaced. Live behaviour now: a full
-> revised 1X2 distribution, `MIN_BET_EV = 0`, retry-once-then-fail-closed, and half-Kelly +
-> exposure stake protection. See `todo-hybrid-risk-engine.md` and DESIGN §2. Kept as the
-> historical record of why the revised-probability step exists.
+> **SUPERSEDED (Phase 6, 2026-06-14).** This is the historical record of the revised-
+> probability experiment. Production Step 2 now uses blind-forecast eligibility plus fixed
+> stake tiers; revised probabilities, EV gates, and Kelly sizing are removed. See
+> `todo-hybrid-risk-engine.md` and DESIGN §2.
 
 ## Problem (observed after matchdays 1–3)
 

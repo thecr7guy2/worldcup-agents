@@ -19,8 +19,9 @@ prompt or validation change could silently reintroduce the same favorite/underdo
       identifiers of the exact odds snapshot used.
 - [x] Populate provenance on automated predictions, automated bets/passes, eliminated
       competitor passes, and Human Challenger decisions.
-- [x] Persist the normalized requested pick/stake/revised probability separately from the
-      final settlement action, with the deterministic engine adjustment reason.
+- [x] Persist the normalized requested pick/stake separately from the final settlement
+      action, with the deterministic engine adjustment reason. Legacy revised-probability
+      fields remain nullable for historical phases.
 - [x] Fail closed on a non-pass with missing/invalid `p_revised`; never reuse the
       systematically-flat blind distribution for Step-2 EV.
 - [x] Require and persist a complete normalized post-market home/draw/away distribution;
@@ -59,10 +60,13 @@ prompt or validation change could silently reintroduce the same favorite/underdo
   probability for every non-pass.
 - Phase 4: rows labeled `phase_4_full_revised_distribution` require the complete revised
   1X2 distribution and retain it even when the model voluntarily passes.
-- Phase 5: rows labeled `phase_5_hybrid_risk_engine` — the live regime. Same full revised
+- Phase 5: rows labeled `phase_5_hybrid_risk_engine`. Same full revised
   distribution + model-owned pick, but `MIN_BET_EV = 0`, one retry before fail-closed, and
   engine-enforced half-Kelly + 50% aggregate-exposure stake protection. See
   `todo-hybrid-risk-engine.md`. (Phases 3 and 4 were dev-only and never produced live rows.)
+- Phase 6: rows labeled `phase_6_coherent_tier_betting`. The blind distribution defines a
+  10-point outcome-eligibility window; Step 2 chooses a fixed tier or passes. Revised
+  probabilities, EV gates, Kelly sizing, and minimum floors are not part of this phase.
 
 Do not use `p_revised IS NOT NULL` as the phase boundary: a Phase-2 pass can legitimately
 have no persisted revised probability.
@@ -75,7 +79,6 @@ Run:
 uv run python scripts/verify_market_reconciliation.py
 ```
 
-It covers prediction provenance, full-distribution normalization, all-outcome EV
-calculation, favorite betting after reconciliation, unsupported-pick rejection,
-fail-closed malformed distributions, voluntary passes, requested-vs-final actions,
-exact odds snapshot persistence, and migration of legacy rows.
+It covers prediction provenance, the blind eligibility contract, fixed-tier persistence,
+ineligible-pick rejection, voluntary passes, exact odds snapshot persistence, the human
+challenger cap, and migration of legacy rows.

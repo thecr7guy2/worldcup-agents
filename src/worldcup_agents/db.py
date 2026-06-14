@@ -122,14 +122,14 @@ CREATE TABLE IF NOT EXISTS bet (
     pick        TEXT,                                   -- NULL = pass
     stake       REAL NOT NULL DEFAULT 0,
     odds_at_bet REAL,
-    p_revised   REAL,                                   -- post-market revised prob for pick
-    p_home_revised REAL,                                -- complete post-market 1X2 belief
+    p_revised   REAL,                                   -- legacy Phase 2-5 revised prob
+    p_home_revised REAL,                                -- legacy Phase 4-5 distribution
     p_draw_revised REAL,
     p_away_revised REAL,
     requested_pick TEXT,                                -- parsed pre-enforcement action
     requested_stake REAL,
-    requested_p_revised REAL,
-    engine_adjustment TEXT,                             -- ev_guard/stake_cap/etc.
+    requested_p_revised REAL,                           -- legacy Phase 2-5 audit field
+    engine_adjustment TEXT,                             -- ineligible_pick/exposure_cap/etc.
     reasoning   TEXT NOT NULL DEFAULT '',
     experiment_phase TEXT,
     prompt_version TEXT,
@@ -565,7 +565,8 @@ def list_competitors(
 
 def human_names(conn: sqlite3.Connection) -> set[str]:
     """The model_names flagged as human competitors — used to exclude them from public
-    accuracy/board views that iterate predictions or bets directly (not via competitor)."""
+    accuracy/board views that iterate predictions or bets directly (not via competitor).
+    """
     rows = conn.execute(
         "SELECT model_name FROM competitor WHERE is_human = 1"
     ).fetchall()
@@ -710,9 +711,7 @@ def get_bet(conn: sqlite3.Connection, model_name: str, fixture_id: int) -> Bet |
         return None
     d = dict(row)
     d["pick"] = Outcome(d["pick"]) if d["pick"] else None
-    d["requested_pick"] = (
-        Outcome(d["requested_pick"]) if d["requested_pick"] else None
-    )
+    d["requested_pick"] = Outcome(d["requested_pick"]) if d["requested_pick"] else None
     return Bet(**d)
 
 
@@ -795,7 +794,8 @@ def record_settlement_batch(
     competitor standings, and all bankroll-ledger entries — in ONE transaction (single
     commit) so a crash can never leave a payout half-applied or a matchday's bust check
     partly applied. Settling a whole matchday in one call is what lets the bust / re-buy
-    rule run once per competitor, independent of the order fixtures settle in (DESIGN §5)."""
+    rule run once per competitor, independent of the order fixtures settle in (DESIGN §5).
+    """
     cur = conn.cursor()
     for s in settlements:
         cur.execute(

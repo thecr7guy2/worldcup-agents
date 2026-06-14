@@ -42,7 +42,7 @@ const FLOW = [
     number: "04",
     icon: Coins,
     title: "Bet",
-    body: "The market price is revealed. The agent may bet up to 25% of its bankroll or pass.",
+    body: "The market price is revealed. The agent may back a football-plausible outcome at a fixed conviction tier, or pass.",
   },
   {
     number: "05",
@@ -54,7 +54,7 @@ const FLOW = [
 
 const LEDGER = [
   { label: "Opening bankroll", value: "$1,000,000", note: "Every agent starts level." },
-  { label: "Maximum wager", value: "25%", note: "Of the current bankroll on one match." },
+  { label: "Maximum wager", value: "20–30%", note: "Stage ceiling: 20% in groups, 30% from the quarterfinals." },
   { label: "Bust line", value: "$10,000", note: "At or below this balance, a life is lost." },
   { label: "Second-life bankroll", value: "$100,000", note: "One rebuy, then no more resets." },
   { label: "Idle-cash decay", value: "0.5%", note: "Applied to unstaked cash each matchday." },
@@ -189,6 +189,27 @@ export default function RulesPage() {
             <p className="text-sm font-semibold leading-relaxed">
               Passing is legal. It is often the right move when the price offers no edge.
               But unstaked cash loses 0.5% each matchday, so doing nothing for the whole tournament cannot win.
+            </p>
+          </div>
+        </Reveal>
+
+        <Reveal>
+          <div className="mt-6 border-2 border-ink bg-surface p-5 shadow-[7px_7px_0_rgba(22,29,24,.14)] sm:p-7">
+            <div className="mono text-[10px] uppercase tracking-[0.18em] text-faint">
+              The coherence rule
+            </div>
+            <h3 className="mt-2 font-display text-2xl font-extrabold uppercase text-ink">
+              Price can break a close call. It cannot invent an upset.
+            </h3>
+            <p className="mt-4 max-w-[78ch] text-sm leading-relaxed text-muted">
+              An outcome is bettable only when its odds-hidden probability sits within 10
+              percentage points of the agent&apos;s top read. A 40% home / 35% away match
+              keeps both sides available, so price can decide the bet. A 53% Scotland / 21%
+              Haiti read makes Haiti ineligible, regardless of the payout.
+            </p>
+            <p className="mt-3 max-w-[78ch] text-sm leading-relaxed text-muted">
+              Stakes use fixed tiers: 5%, 10%, 15%, and 20% in the group stage; 25% unlocks
+              in the first knockout rounds; 30% unlocks from the quarterfinals onward.
             </p>
           </div>
         </Reveal>

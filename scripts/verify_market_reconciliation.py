@@ -1,11 +1,17 @@
-"""Market-reconciliation regression test — synthetic, offline, no LLM/network.
+"""Phase-6 betting-contract regression — synthetic, offline, no network.
 
     uv run python scripts/verify_market_reconciliation.py
 
-Reproduces the Canada-Bosnia failure shape: a flat blind forecast makes the favorite
-look negative-EV and the underdog look attractive. Verifies that Step 2 can revise
-toward the market, that the EV guard uses the revised probability, that missing/invalid
-revised probabilities fail closed, and that prediction/bet provenance survives persistence.
+The historical filename is retained because operations and documentation link to it.
+Market reconciliation, revised probabilities, EV gates, and Kelly sizing no longer exist.
+This script verifies the replacement contract:
+
+* Step 1 persists an odds-hidden distribution with provenance.
+* Step 2 exposes only outcomes inside the blind 10-point eligibility window.
+* Fixed tiers persist without revised-probability fields.
+* Ineligible picks fail closed while preserving the requested action.
+* Voluntary passes remain normal.
+* Legacy schemas and the human challenger's separate 25% cap still work.
 """
 
 from __future__ import annotations
@@ -15,10 +21,11 @@ import sqlite3
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from worldcup_agents import db
 from worldcup_agents import predict as prediction_engine
-from worldcup_agents.config import MIN_BET_EV, ModelSpec
+from worldcup_agents.config import HUMAN_MAX_STAKE_FRACTION, ModelSpec
 from worldcup_agents.experiment import (
     BET_PROMPT_VERSION,
     BETTING_RULES_VERSION,
@@ -39,12 +46,17 @@ from worldcup_agents.models import (
 )
 from worldcup_agents.web import challenger
 
-NOW = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
-KICKOFF = datetime(2099, 6, 12, 19, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
+KICKOFF = datetime(2099, 6, 14, 19, 0, tzinfo=timezone.utc)
 MODEL = ModelSpec("Regression Agent", "test/regression-agent")
+BANKROLL = 1_000_000.0
 
 
-def _completion(payload: dict, generation_id: str):
+def _completion(
+    payload: dict,
+    generation_id: str,
+    inspect_prompt: Callable[[str], None] | None = None,
+):
     def fake_complete(
         model_id: str,
         prompt: str,
@@ -55,29 +67,34 @@ def _completion(payload: dict, generation_id: str):
         **_: object,
     ) -> tuple[str, ModelCall]:
         assert model_id == MODEL.model_id
-        return json.dumps(payload), ModelCall(
+        if inspect_prompt:
+            inspect_prompt(prompt)
+        text = json.dumps(payload)
+        return text, ModelCall(
             model_name=model_name,
             step=step,
             fixture_id=fixture_id,
             generation_id=generation_id,
             prompt_text=prompt,
-            response_text=json.dumps(payload),
+            response_text=text,
             created_at=NOW,
         )
 
     return fake_complete
 
 
-def _setup() -> tuple[sqlite3.Connection, Fixture, MatchBriefing, OddsSnapshot]:
-    path = Path(tempfile.mkdtemp()) / "market_reconciliation.db"
+def _setup(
+    fixture_id: int = 105,
+) -> tuple[sqlite3.Connection, Fixture, MatchBriefing, OddsSnapshot]:
+    path = Path(tempfile.mkdtemp()) / "phase6_contract.db"
     conn = db.connect(path)
     db.init_db(conn)
-    db.upsert_team(conn, Team(id=1, name="Canada", group="B"))
-    db.upsert_team(conn, Team(id=2, name="Bosnia and Herzegovina", group="B"))
+    db.upsert_team(conn, Team(id=1, name="Haiti", group="C"))
+    db.upsert_team(conn, Team(id=2, name="Scotland", group="C"))
     fixture = Fixture(
-        id=105,
+        id=fixture_id,
         stage=Stage.GROUP,
-        group="B",
+        group="C",
         kickoff=KICKOFF,
         home_id=1,
         away_id=2,
@@ -86,19 +103,33 @@ def _setup() -> tuple[sqlite3.Connection, Fixture, MatchBriefing, OddsSnapshot]:
     briefing = MatchBriefing(
         fixture_id=fixture.id,
         created_at=NOW,
-        content="Synthetic shared briefing for the market-reconciliation regression.",
+        content="Scotland have the stronger squad, form, and tactical control.",
     )
     db.upsert_match_briefing(conn, briefing)
     odds = OddsSnapshot(
         fixture_id=fixture.id,
         captured_at=NOW,
         bookmaker="consensus",
-        home=1.83,
-        draw=3.55,
-        away=4.80,
+        home=6.0,
+        draw=4.525,
+        away=1.525,
     )
     db.upsert_odds_snapshot(conn, odds)
     return conn, fixture, briefing, odds
+
+
+def _blind_prediction(fixture_id: int = 105) -> Prediction:
+    return Prediction(
+        model_name=MODEL.name,
+        fixture_id=fixture_id,
+        winner=Outcome.AWAY,
+        p_home=0.21,
+        p_draw=0.26,
+        p_away=0.53,
+        confidence=0.53,
+        reasoning="Scotland are the clear football call.",
+        created_at=NOW,
+    )
 
 
 def _verify_legacy_migration() -> None:
@@ -147,7 +178,7 @@ def _verify_legacy_migration() -> None:
     assert bet.requested_pick is None and bet.requested_stake is None
     assert bet.requested_p_revised is None and bet.engine_adjustment is None
     conn.close()
-    print("legacy schema migration + nullable provenance: PASS")
+    print("legacy schema migration + nullable Phase-2-to-5 fields: PASS")
 
 
 def _verify_human_actions() -> None:
@@ -155,12 +186,12 @@ def _verify_human_actions() -> None:
     original_connect = db.connect
     conn = original_connect(path)
     db.init_db(conn)
-    db.upsert_team(conn, Team(id=1, name="Canada", group="B"))
-    db.upsert_team(conn, Team(id=2, name="Bosnia and Herzegovina", group="B"))
+    db.upsert_team(conn, Team(id=1, name="Haiti", group="C"))
+    db.upsert_team(conn, Team(id=2, name="Scotland", group="C"))
     fixture = Fixture(
         id=205,
         stage=Stage.GROUP,
-        group="B",
+        group="C",
         kickoff=KICKOFF,
         home_id=1,
         away_id=2,
@@ -171,7 +202,7 @@ def _verify_human_actions() -> None:
         Prediction(
             model_name="Human Regression",
             fixture_id=fixture.id,
-            winner=Outcome.HOME,
+            winner=Outcome.AWAY,
             confidence=0.55,
             reasoning="Human blind prediction.",
             created_at=NOW,
@@ -181,9 +212,9 @@ def _verify_human_actions() -> None:
         fixture_id=fixture.id,
         captured_at=NOW,
         bookmaker="consensus",
-        home=1.83,
-        draw=3.55,
-        away=4.80,
+        home=6.0,
+        draw=4.525,
+        away=1.525,
     )
     db.upsert_odds_snapshot(conn, odds)
     conn.close()
@@ -199,24 +230,19 @@ def _verify_human_actions() -> None:
             ),
             name="Human Regression",
         )
-
         conn = original_connect(path)
         bet = db.get_bet(conn, "Human Regression", fixture.id)
         assert response["pick"] == "pass"
         assert bet is not None and bet.is_pass
-        assert bet.requested_pick is None and bet.requested_stake == 0
-        assert bet.engine_adjustment is None
         assert bet.prompt_version == HUMAN_BET_VERSION
         assert bet.rules_version == HUMAN_RULES_VERSION
         assert bet.requested_model_id == "human"
-        assert bet.odds_snapshot_bookmaker == odds.bookmaker
-        assert bet.odds_snapshot_captured_at == odds.captured_at
         conn.close()
 
         response = challenger.place_bet(
             challenger.BetBody(
                 fixture_id=fixture.id,
-                pick="home",
+                pick="away",
                 stake=400_000,
                 reasoning="Human oversized request.",
             ),
@@ -224,15 +250,15 @@ def _verify_human_actions() -> None:
         )
         conn = original_connect(path)
         bet = db.get_bet(conn, "Human Regression", fixture.id)
-        assert response["pick"] == "home" and response["stake"] == 250_000
-        assert bet is not None and bet.pick == Outcome.HOME
-        assert bet.stake == 250_000 and bet.requested_stake == 400_000
-        assert bet.requested_pick == Outcome.HOME
+        expected_cap = BANKROLL * HUMAN_MAX_STAKE_FRACTION
+        assert response["pick"] == "away" and response["stake"] == expected_cap
+        assert bet is not None and bet.pick == Outcome.AWAY
+        assert bet.stake == expected_cap and bet.requested_stake == 400_000
         assert bet.engine_adjustment == "stake_cap"
         conn.close()
     finally:
         db.connect = original_connect
-    print("human pass snapshot + requested/final cap action: PASS")
+    print("human pass + independent flat 25% manual cap: PASS")
 
 
 def main() -> None:
@@ -240,14 +266,14 @@ def main() -> None:
 
     prediction_engine.complete = _completion(
         {
-            "p_home": 0.43,
-            "p_draw": 0.29,
-            "p_away": 0.28,
-            "expected_home_goals": 1.5,
-            "expected_away_goals": 1.0,
-            "most_likely_score": "1-0",
-            "key_factors": ["form", "home crowd"],
-            "reasoning": "Canada is the likeliest winner, but the blind forecast is flat.",
+            "p_home": 0.21,
+            "p_draw": 0.26,
+            "p_away": 0.53,
+            "expected_home_goals": 0.7,
+            "expected_away_goals": 1.8,
+            "most_likely_score": "0-2",
+            "key_factors": ["squad quality", "midfield control"],
+            "reasoning": "Scotland are the clear football call.",
         },
         "gen-predict",
     )
@@ -256,56 +282,36 @@ def main() -> None:
         MODEL,
         fixture,
         briefing,
-        "Canada",
-        "Bosnia and Herzegovina",
+        "Haiti",
+        "Scotland",
     )
-    assert prediction.p_home == 0.43
+    assert prediction.winner == Outcome.AWAY
+    assert prediction.p_away == 0.53
     assert prediction.experiment_phase == EXPERIMENT_PHASE
     assert prediction.prompt_version == FORECAST_PROMPT_VERSION
     assert prediction.requested_model_id == MODEL.model_id
     assert prediction.call_generation_id == "gen-predict"
     assert prediction.git_commit
     assert db.get_prediction(conn, MODEL.name, fixture.id) == prediction
-    print("prediction provenance round trip: PASS")
+    assert prediction_engine._eligible_outcomes(prediction) == {Outcome.AWAY: 0.53}
+    print("odds-hidden prediction + provenance + eligibility: PASS")
 
-    blind_home_ev = prediction.p_home * odds.home - 1
-    blind_away_ev = prediction.p_away * odds.away - 1
-    assert blind_home_ev < 0
-    assert blind_away_ev > MIN_BET_EV
-
-    rounded, issue = prediction_engine._parse_revised_distribution(
-        {
-            "p_home_revised": 0.600,
-            "p_draw_revised": 0.240,
-            "p_away_revised": 0.159,
-        }
-    )
-    assert issue is None and rounded is not None
-    assert abs(sum(rounded.values()) - 1.0) < 1e-12
-    rejected, issue = prediction_engine._parse_revised_distribution(
-        {
-            "p_home_revised": 0.60,
-            "p_draw_revised": 0.40,
-            "p_away_revised": 0.20,
-        }
-    )
-    assert rejected is None and issue == "invalid_revised_distribution"
-    all_evs = prediction_engine._revised_evs(rounded, odds)
-    assert set(all_evs) == {Outcome.HOME, Outcome.DRAW, Outcome.AWAY}
-    assert all_evs[Outcome.HOME] > MIN_BET_EV
-    assert all_evs[Outcome.AWAY] < MIN_BET_EV
-    print("full distribution normalization + all-outcome EV calculation: PASS")
+    def inspect_bet_prompt(prompt: str) -> None:
+        assert "ONLY eligible outcomes are: away (Scotland) 53%" in prompt
+        assert "Passing is a normal decision" in prompt
+        assert "stake_pct" in prompt
+        assert "revised probability" not in prompt.lower()
+        assert "kelly" not in prompt.lower()
+        assert "EV gate" not in prompt
 
     prediction_engine.complete = _completion(
         {
-            "p_home_revised": 0.60,
-            "p_draw_revised": 0.24,
-            "p_away_revised": 0.16,
-            "pick": "home",
-            "stake": 100_000,
-            "reasoning": "The market corrects the flat forecast; Canada remains value.",
+            "pick": "away",
+            "stake_pct": 20,
+            "reasoning": "Scotland's control deserves the top group-stage tier.",
         },
         "gen-favorite",
+        inspect_bet_prompt,
     )
     favorite = prediction_engine.bet(
         conn,
@@ -313,238 +319,77 @@ def main() -> None:
         fixture,
         prediction,
         odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
+        BANKROLL,
+        "Haiti",
+        "Scotland",
         force=True,
     )
-    # The reconciled favorite is bettable (not auto-passed); half-Kelly then sizes the stake
-    # down from the requested 100k: EV 0.098 at 1.83 -> 1M * 0.5 * (0.098/0.83) = 59,036.14.
-    assert favorite.pick == Outcome.HOME
-    assert abs(favorite.stake - 59_036.14) < 0.5
-    assert favorite.p_revised == 0.60
-    assert favorite.has_revised_distribution
-    assert favorite.p_home_revised == 0.60
-    assert favorite.p_draw_revised == 0.24
-    assert favorite.p_away_revised == 0.16
-    assert favorite.requested_pick == Outcome.HOME
-    assert favorite.requested_stake == 100_000
-    assert favorite.requested_p_revised == 0.60
-    assert favorite.engine_adjustment == "kelly_cap"
+    assert favorite.pick == Outcome.AWAY and favorite.stake == 200_000
+    assert favorite.requested_pick == Outcome.AWAY
+    assert favorite.requested_stake == 200_000
+    assert favorite.engine_adjustment is None
+    assert favorite.p_revised is None and not favorite.has_revised_distribution
     assert favorite.experiment_phase == EXPERIMENT_PHASE
     assert favorite.prompt_version == BET_PROMPT_VERSION
     assert favorite.rules_version == BETTING_RULES_VERSION
     assert favorite.requested_model_id == MODEL.model_id
     assert favorite.call_generation_id == "gen-favorite"
-    assert favorite.odds_snapshot_bookmaker == odds.bookmaker
     assert favorite.odds_snapshot_captured_at == odds.captured_at
-    assert favorite.git_commit
     assert db.get_bet(conn, MODEL.name, fixture.id) == favorite
-    print("reconciled favorite bet + provenance round trip: PASS")
+    print("eligible 20% tier + Phase-6 persistence contract: PASS")
 
+    conn, fixture, _, odds = _setup(106)
+    prediction = _blind_prediction(106)
     prediction_engine.complete = _completion(
         {
-            "p_home_revised": 0.56,
-            "p_draw_revised": 0.26,
-            "p_away_revised": 0.18,
-            "pick": "pass",
-            "stake": 0,
-            "reasoning": "No offered outcome clears my required edge.",
-        },
-        "gen-voluntary-pass",
-    )
-    voluntary_pass = prediction_engine.bet(
-        conn,
-        MODEL,
-        fixture,
-        prediction,
-        odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
-        force=True,
-    )
-    assert voluntary_pass.is_pass and voluntary_pass.engine_adjustment is None
-    assert voluntary_pass.has_revised_distribution
-    assert voluntary_pass.p_revised is None
-    assert voluntary_pass.p_home_revised == 0.56
-    print("voluntary pass retains complete revised distribution: PASS")
-
-    prediction_engine.complete = _completion(
-        {
-            "p_home_revised": 0.56,
-            "p_draw_revised": 0.24,
-            "p_away_revised": 0.20,
-            "pick": "away",
-            "stake": 150_000,
-            "reasoning": "The blind underdog edge does not survive market reconciliation.",
-        },
-        "gen-phantom",
-    )
-    phantom = prediction_engine.bet(
-        conn,
-        MODEL,
-        fixture,
-        prediction,
-        odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
-        force=True,
-    )
-    assert phantom.is_pass
-    assert phantom.requested_pick == Outcome.AWAY
-    assert phantom.requested_stake == 150_000
-    assert phantom.requested_p_revised == 0.20
-    assert phantom.has_revised_distribution
-    assert phantom.engine_adjustment == "ev_guard"
-    assert "by revised probability" in phantom.reasoning
-    assert phantom.call_generation_id == "gen-phantom"
-    assert phantom.odds_snapshot_captured_at == odds.captured_at
-    print("phantom underdog edge rejected by revised probability: PASS")
-
-    prediction_engine.complete = _completion(
-        {
-            "pick": "away",
-            "stake": 150_000,
-            "reasoning": "Legacy response with no revised probability.",
-        },
-        "gen-fallback-positive",
-    )
-    missing_revised = prediction_engine.bet(
-        conn,
-        MODEL,
-        fixture,
-        prediction,
-        odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
-        force=True,
-    )
-    assert missing_revised.is_pass
-    assert missing_revised.p_revised is None
-    assert missing_revised.requested_pick == Outcome.AWAY
-    assert missing_revised.requested_stake == 150_000
-    assert missing_revised.requested_p_revised is None
-    assert not missing_revised.has_revised_distribution
-    assert missing_revised.engine_adjustment == "missing_revised_distribution"
-    assert "revised EV could not be verified" in missing_revised.reasoning
-
-    prediction_engine.complete = _completion(
-        {
-            "p_home_revised": "NaN",
-            "p_draw_revised": 0.24,
-            "p_away_revised": 0.16,
             "pick": "home",
-            "stake": 150_000,
-            "reasoning": "Invalid revised distribution must fail closed.",
+            "stake_pct": 20,
+            "reasoning": "The payout is tempting.",
         },
-        "gen-fallback-negative",
+        "gen-blocked-longshot",
     )
-    invalid_revised = prediction_engine.bet(
+    blocked = prediction_engine.bet(
         conn,
         MODEL,
         fixture,
         prediction,
         odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
+        BANKROLL,
+        "Haiti",
+        "Scotland",
         force=True,
     )
-    assert invalid_revised.is_pass
-    assert invalid_revised.requested_pick == Outcome.HOME
-    assert invalid_revised.requested_stake == 150_000
-    assert invalid_revised.requested_p_revised is None
-    assert not invalid_revised.has_revised_distribution
-    assert invalid_revised.engine_adjustment == "invalid_revised_distribution"
-    assert "revised EV could not be verified" in invalid_revised.reasoning
-    print("missing/invalid revised distribution fails closed: PASS")
+    assert blocked.is_pass
+    assert blocked.requested_pick == Outcome.HOME
+    assert blocked.requested_stake == 200_000
+    assert blocked.engine_adjustment == "ineligible_pick"
+    assert "32% below the blind top read" in blocked.reasoning
+    print("Haiti-style payout chase fails closed, request preserved: PASS")
 
+    conn, fixture, _, odds = _setup(107)
+    prediction = _blind_prediction(107)
     prediction_engine.complete = _completion(
         {
-            "p_home_revised": 0.85,
-            "p_draw_revised": 0.10,
-            "p_away_revised": 0.05,
-            "pick": "home",
-            "stake": 400_000,
-            "reasoning": "A big edge whose half-Kelly size still exceeds the 25% hard cap.",
-        },
-        "gen-cap",
-    )
-    capped = prediction_engine.bet(
-        conn,
-        MODEL,
-        fixture,
-        prediction,
-        odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
-        force=True,
-    )
-    assert capped.pick == Outcome.HOME and capped.stake == 250_000
-    assert capped.requested_pick == Outcome.HOME
-    assert capped.requested_stake == 400_000
-    assert capped.requested_p_revised == 0.85
-    assert capped.engine_adjustment == "stake_cap"
-    print("stake-cap adjustment preserves requested and final amounts: PASS")
-
-    prediction_engine.complete = _completion(
-        {
-            "p_home_revised": 0.60,
-            "p_draw_revised": 0.24,
-            "p_away_revised": 0.16,
-            "pick": "not-an-outcome",
-            "stake": 100_000,
-            "reasoning": "Malformed requested pick.",
-        },
-        "gen-invalid",
-    )
-    invalid = prediction_engine.bet(
-        conn,
-        MODEL,
-        fixture,
-        prediction,
-        odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
-        force=True,
-    )
-    assert invalid.is_pass
-    assert invalid.requested_pick is None
-    assert invalid.requested_stake == 100_000
-    assert invalid.requested_p_revised is None
-    assert invalid.has_revised_distribution
-    assert invalid.engine_adjustment == "invalid_request"
-
-    prediction_engine.complete = _completion(
-        {
-            "p_home_revised": 0.60,
-            "p_draw_revised": 0.24,
-            "p_away_revised": 0.16,
             "pick": "pass",
-            "stake": 100_000,
-            "reasoning": "Contradictory pass with a positive stake.",
+            "stake_pct": 0,
+            "reasoning": "The eligible price is too short.",
         },
-        "gen-inconsistent",
+        "gen-pass",
     )
-    inconsistent = prediction_engine.bet(
+    passed = prediction_engine.bet(
         conn,
         MODEL,
         fixture,
         prediction,
         odds,
-        1_000_000,
-        "Canada",
-        "Bosnia and Herzegovina",
+        BANKROLL,
+        "Haiti",
+        "Scotland",
         force=True,
     )
-    assert inconsistent.is_pass
-    assert inconsistent.requested_stake == 100_000
-    assert inconsistent.engine_adjustment == "invalid_request"
+    assert passed.is_pass and passed.engine_adjustment is None
+    assert passed.requested_stake == 0
+    print("voluntary pass is normal and unadjusted: PASS")
 
     eliminated = prediction_engine._record_pass(
         conn,
@@ -555,14 +400,14 @@ def main() -> None:
         force=True,
     )
     assert eliminated.is_pass
-    assert eliminated.requested_pick is None
-    assert eliminated.requested_stake is None
     assert eliminated.engine_adjustment == "eliminated"
-    print("invalid, inconsistent, and eliminated actions are classified: PASS")
+    assert eliminated.prompt_version == BET_PROMPT_VERSION
+    assert eliminated.rules_version == BETTING_RULES_VERSION
+    print("engine-generated eliminated pass retains Phase-6 labels: PASS")
 
-    conn.close()
-    _verify_human_actions()
     _verify_legacy_migration()
+    _verify_human_actions()
+    print("\nAll Phase-6 betting-contract checks passed.")
 
 
 if __name__ == "__main__":

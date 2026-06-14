@@ -83,57 +83,56 @@ GROUP_LETTERS = "ABCDEFGHIJKL"  # the 12 groups A..L
 
 # ---- Competition constants (all tunable in one place) ----
 STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
-MAX_STAKE_FRACTION = 0.25  # group-stage per-match hard cap (default); the cap ramps by stage
+# Step-2 coherence: an outcome may be backed only when its blind Step-1 probability is
+# within this many probability points of the model's top read. Odds can choose among
+# plausible outcomes, but cannot turn a clearly unlikely longshot into a large wager.
+BET_ELIGIBILITY_WINDOW = 0.10
 
-# Stake protection — the engine SHRINKS the model's requested stake toward these limits
-# (full Kelly = EV / (decimal_odds - 1) of bankroll); the only thing that can RAISE a stake is
-# the minimum-bet floor.
-#
-# Kelly fraction is held at HALF-KELLY at every stage — deliberately NOT ramped. Kelly's
-# optimality assumes calibrated probabilities, but these are uncalibrated, self-reported LLM
-# numbers; half-Kelly is the standard margin against that estimation error, and full Kelly on
-# an over-confident final estimate could lose half the bankroll on one bet. Late-stage
-# aggression is carried by the CAP ramp instead, which only lets a genuinely big edge bet
-# bigger — it never amplifies an over-confident number the way a higher Kelly fraction would.
-KELLY_FRACTION = 0.5
-# Per-match hard cap, rising round by round (25% -> 50%): with fewer matches left a strong
-# edge may stake a larger share. Keyed by Stage.value.
+# Fixed conviction tiers. The prompt offers only the tiers allowed by the current stage;
+# the engine validates them and converts the chosen percentage into dollars.
+BET_STAKE_TIERS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30)
+
+# Aggressive stage ceilings keep early variance bounded while preserving large wagers.
+# Group matches top out at 20%, the first two knockout rounds at 25%, and the quarterfinals
+# onward at 30%.
+MAX_STAKE_FRACTION = 0.20
 STAGE_MAX_STAKE_FRACTION: dict[str, float] = {
-    "group": 0.25,
-    "round_of_32": 0.30,
-    "round_of_16": 0.35,
-    "quarter_final": 0.40,
-    "semi_final": 0.45,
-    "third_place": 0.45,
-    "final": 0.50,
+    "group": 0.20,
+    "round_of_32": 0.25,
+    "round_of_16": 0.25,
+    "quarter_final": 0.30,
+    "semi_final": 0.30,
+    "third_place": 0.30,
+    "final": 0.30,
 }
 # Most of a competitor's bankroll that may be live across ALL its unsettled matches at once.
 MAX_AGGREGATE_EXPOSURE = 0.50
-# Minimum bet floor: when a model CHOOSES to bet (its pick clears the EV guard), the stake is
-# lifted to at least this fraction of bankroll, so there are no trivial bets. The floor is the
-# one rule that can raise a stake above what the model/Kelly asked; it is still bounded by the
-# per-match cap and remaining exposure (it never breaches a hard limit). It only ever applies
-# to a pick that has already cleared MIN_BET_EV, so it lifts real edges, never rounding noise.
-MIN_STAKE_FRACTION = 0.02
 
-
-def stage_kelly_fraction(stage: str) -> float:
-    """Kelly fraction for a stage — half-Kelly everywhere (uncalibrated-probability margin)."""
-    return KELLY_FRACTION
+# The secret human challenger keeps its original simple manual ruleset. It does not emit a
+# complete 1X2 distribution, so it cannot use the AI-only eligibility mechanic without a
+# separate UI/data-model overhaul.
+HUMAN_MAX_STAKE_FRACTION = 0.25
 
 
 def stage_cap_fraction(stage: str) -> float:
-    """Per-match hard-cap fraction for a stage — 25% at the group, rising to 50% by the final."""
+    """Maximum fixed stake tier available at this stage."""
     return STAGE_MAX_STAKE_FRACTION.get(stage, MAX_STAKE_FRACTION)
+
+
+def stage_stake_tiers(stage: str) -> tuple[float, ...]:
+    """Fixed stake tiers available at this stage, ordered from smallest to largest."""
+    cap = stage_cap_fraction(stage)
+    return tuple(tier for tier in BET_STAKE_TIERS if tier <= cap + 1e-12)
+
+
 IDLE_DECAY = 0.005  # fraction lost on un-staked bankroll per matchday (anti-cowardice)
 BANKRUPT_FLOOR = 10_000.0  # at/below this, the agent is bust
 REBUY_AMOUNT = 100_000.0  # a smaller "second life" granted on bust
 MAX_LIVES = 1  # number of re-buys allowed
 
-# The secret Human Challenger competes under all of the constants above. While False he is
-# hidden from every public board (he still bets, settles, and decays exactly like the AIs —
-# only his visibility is suppressed). Flip to True after the tournament to reveal his
-# standing on the public site; no other code change is needed.
+# The secret Human Challenger shares settlement, decay, and bankroll rules. While False he
+# is hidden from every public board. Flip to True after the tournament to reveal his standing
+# on the public site; no other code change is needed.
 CHALLENGER_PUBLIC = False
 
 # Accuracy leaderboard scoring (DESIGN §6) — graded off the PREDICT step, stakes
@@ -172,15 +171,6 @@ PREDICT_MAX_WORKERS = 6
 # Refresh a cached late update at predict time if it is older than this many minutes, so
 # confirmed lineups that landed since the first (~T-75) fetch are picked up before the lock.
 LATE_UPDATE_REFRESH_MIN = 20.0
-# Minimum expected value for a bet to stand. The engine calculates EV for all three outcomes
-# from the complete revised distribution, then validates the model's requested pick:
-# EV = p_revised(pick) * decimal_odds - 1. Set to 0.015 (a ~1.5% edge): a real-but-small edge
-# is the bar to bet, NOT bare positivity. This matters because the minimum-bet floor lifts any
-# surviving bet to 2% of bankroll — so without this gate, rounding noise (a sub-1% "edge" that
-# is really just probability imprecision) would become a $20k bet. The gate keeps action on
-# genuine reads while refusing to stake noise. A non-pass without a valid distribution is
-# retried once, then fails closed.
-MIN_BET_EV = 0.015
 # Near-kickoff odds freshness: when a fixture is inside the late-update/bet horizon and its
 # newest consensus snapshot is older than this, the tick triggers ONE targeted odds poll
 # (1 API credit, covers all events). Keeps bets from being placed into a line up to 6 hours
