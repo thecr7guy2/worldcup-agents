@@ -226,9 +226,12 @@ function BoardCard({ entry, home, away }: { entry: BoardEntry; home: TeamSide; a
           <Row label="Predicts">
             <span className="font-medium text-ink">
               {outcomeLabel(p.winner, home.name, away.name)}
+              {p.winner !== "draw" && <span className="font-normal text-muted"> to win</span>}
             </span>
             {p.pred_home_goals != null && p.pred_away_goals != null && (
-              <span className="mono ml-2 text-muted">{p.pred_home_goals}-{p.pred_away_goals}</span>
+              <span className="mono ml-2 text-[11px] text-faint">
+                {home.code ?? "H"} {p.pred_home_goals}–{p.pred_away_goals} {away.code ?? "A"}
+              </span>
             )}
           </Row>
           {p.p_home != null && p.p_draw != null && p.p_away != null && (
@@ -240,7 +243,7 @@ function BoardCard({ entry, home, away }: { entry: BoardEntry; home: TeamSide; a
           )}
           {b && b.pick && b.stake > 0 ? (
             <Row label="Bets">
-              <span className="font-medium text-ink uppercase">{b.pick}</span>
+              <span className="font-medium text-ink">{outcomeLabel(b.pick, home.name, away.name)}</span>
               <span className="mono ml-2 text-muted">
                 {money(b.stake)}{b.odds_at_bet ? ` @ ${b.odds_at_bet.toFixed(2)}` : ""}
               </span>
