@@ -149,6 +149,18 @@ words. No talk of expected value, Kelly, edges, or bare percentages.
 You are measured on results across the whole tournament, not on eloquence or activity. Be \
 decisive, be patient, and protect your bankroll."""
 
+_BET_FORMAT_RETRY_INSTRUCTION = """
+
+FORMAT CORRECTION ONLY:
+Your previous answer could not be parsed as JSON. Preserve the same intended pick, stake
+tier, and reasoning. Do not reconsider the match. Return ONLY one valid JSON object using
+the exact schema requested above, with no markdown fences or surrounding prose.
+
+Your previous malformed answer was:
+--- PREVIOUS ANSWER ---
+{previous}
+--- END PREVIOUS ANSWER ---"""
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -528,20 +540,40 @@ Respond with ONLY a JSON object, no other text:
 matchups, tactics, team news) and why the selected eligible outcome is or is not worth its \
 price, then why this conviction tier fits. Lead with football, not formulas>"}}"""
 
-    text, call = complete(
-        model.model_id,
-        prompt,
-        model_name=model.name,
-        step="bet",
-        fixture_id=fixture.id,
-        system=SYSTEM_GAMBLER,
-        max_tokens=25000,
-        temperature=0.5,
-        reasoning_effort="high",
-    )
-    db.log_model_call(conn, call)
+    # A malformed response gets one format-only retry. Both calls are logged, and the final
+    # Bet links to the successful attempt's generation ID. Semantic rule violations are not
+    # retried; the engine handles those deterministically below.
+    retry_prompt = prompt
+    data: dict | None = None
+    call = None
+    for attempt in range(2):
+        text, call = complete(
+            model.model_id,
+            retry_prompt,
+            model_name=model.name,
+            step="bet",
+            fixture_id=fixture.id,
+            system=SYSTEM_GAMBLER,
+            max_tokens=25000,
+            temperature=0.5,
+            reasoning_effort="high",
+        )
+        db.log_model_call(conn, call)
+        try:
+            data = extract_json(text)
+            break
+        except LLMError:
+            if attempt == 1:
+                raise
+            if _now() >= fixture.kickoff:
+                raise KickoffPassed(
+                    f"{model.name}: kickoff passed before retrying bet {fixture.id}"
+                )
+            retry_prompt = prompt + _BET_FORMAT_RETRY_INSTRUCTION.format(
+                previous=text[:2000]
+            )
 
-    data = extract_json(text)
+    assert data is not None and call is not None
     raw_pick = str(data.get("pick", "pass")).strip().lower()
     reasoning = str(data.get("reasoning", "")).strip()
     pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None

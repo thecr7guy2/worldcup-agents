@@ -86,7 +86,9 @@ Stake sizing uses fixed conviction tiers instead of Kelly or an EV formula:
 The engine validates the tier, applies the stage ceiling, and trims only for the existing
 50% aggregate-exposure budget. There is no revised probability, EV gate, market blend,
 Kelly sizing, or minimum stake floor. Passing is explicitly normal when no eligible price
-deserves money; the prompt no longer pressures agents to bet every real lean.
+deserves money; the prompt no longer pressures agents to bet every real lean. A malformed
+Step-2 JSON response gets one format-only retry; parsed semantic violations are enforced
+without asking the model to reconsider its decision.
 
 Conviction from step 1 is the bridge into step 2 — the stake reflects *how sure* it was.
 Hiding odds until step 2 means an agent disagreeing with the bookies does so on football

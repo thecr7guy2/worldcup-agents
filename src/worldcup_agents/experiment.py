@@ -21,7 +21,7 @@ from pathlib import Path
 EXPERIMENT_PHASE = "phase_6_coherent_tier_betting"
 
 FORECAST_PROMPT_VERSION = "forecast_v3_calibrated_spread"
-BET_PROMPT_VERSION = "bet_v9_coherence_voice_fixed_tiers"
+BET_PROMPT_VERSION = "bet_v10_coherence_voice_fixed_tiers_format_retry"
 BETTING_RULES_VERSION = "rules_v8_gap10_tiers_stage20_25_30_exposure50"
 
 HUMAN_FORECAST_VERSION = "human_forecast_v1"

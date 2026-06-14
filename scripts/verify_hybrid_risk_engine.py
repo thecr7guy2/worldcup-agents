@@ -26,6 +26,7 @@ from worldcup_agents.config import (
     ModelSpec,
     stage_stake_tiers,
 )
+from worldcup_agents.llm import LLMError
 from worldcup_agents.models import (
     Bet,
     Fixture,
@@ -66,6 +67,28 @@ def _completion(payload: dict, generation_id: str = "tier-gen"):
         )
 
     return fake_complete
+
+
+def _completion_sequence(responses: list[str | dict], prefix: str):
+    state = {"calls": 0, "prompts": []}
+
+    def fake_complete(model_id, prompt, *, model_name, step, fixture_id=None, **_):
+        index = state["calls"]
+        state["calls"] += 1
+        state["prompts"].append(prompt)
+        response = responses[min(index, len(responses) - 1)]
+        text = response if isinstance(response, str) else json.dumps(response)
+        return text, ModelCall(
+            model_name=model_name,
+            step=step,
+            fixture_id=fixture_id,
+            generation_id=f"{prefix}-{index}",
+            prompt_text=prompt,
+            response_text=text,
+            created_at=NOW,
+        )
+
+    return fake_complete, state
 
 
 def _setup(stage: Stage = Stage.GROUP) -> tuple:
@@ -224,6 +247,74 @@ def main() -> None:
     assert invalid_tier.requested_stake == 120_000
     assert invalid_tier.engine_adjustment == "invalid_tier"
     print("arbitrary percentage outside the fixed ladder is rejected: PASS")
+
+    conn, fixture = _setup()
+    recovery_stub, recovery_state = _completion_sequence(
+        [
+            "I choose Scotland at the top tier.",
+            {
+                "pick": "away",
+                "stake_pct": 20,
+                "reasoning": "Scotland remain the clear football call.",
+            },
+        ],
+        "format-retry",
+    )
+    engine.complete = recovery_stub
+    recovered = engine.bet(
+        conn,
+        MODEL,
+        fixture,
+        clear,
+        ODDS,
+        BANKROLL,
+        "Haiti",
+        "Scotland",
+        force=True,
+    )
+    assert recovered.pick == Outcome.AWAY and recovered.stake == 200_000
+    assert recovered.call_generation_id == "format-retry-1"
+    assert recovery_state["calls"] == 2
+    assert "FORMAT CORRECTION ONLY" in recovery_state["prompts"][1]
+    assert "I choose Scotland at the top tier." in recovery_state["prompts"][1]
+    logged = conn.execute(
+        "SELECT COUNT(*) FROM model_call WHERE model_name = ? AND fixture_id = ?",
+        (MODEL.name, FIXTURE_ID),
+    ).fetchone()[0]
+    assert logged == 2
+
+    conn, fixture = _setup()
+    failure_stub, failure_state = _completion_sequence(
+        ["not json", "still not json"],
+        "format-fail",
+    )
+    engine.complete = failure_stub
+    try:
+        engine.bet(
+            conn,
+            MODEL,
+            fixture,
+            clear,
+            ODDS,
+            BANKROLL,
+            "Haiti",
+            "Scotland",
+            force=True,
+        )
+    except LLMError:
+        pass
+    else:
+        raise AssertionError("two malformed responses should raise LLMError")
+    assert failure_state["calls"] == 2
+    assert db.get_bet(conn, MODEL.name, FIXTURE_ID) is None
+    logged = conn.execute(
+        "SELECT COUNT(*) FROM model_call WHERE model_name = ? AND fixture_id = ?",
+        (MODEL.name, FIXTURE_ID),
+    ).fetchone()[0]
+    assert logged == 2
+    print(
+        "malformed JSON retries once, logs both calls, then succeeds or fails loudly: PASS"
+    )
 
     assert stage_stake_tiers(Stage.GROUP.value) == (0.05, 0.10, 0.15, 0.20)
     assert stage_stake_tiers(Stage.R16.value)[-1] == 0.25

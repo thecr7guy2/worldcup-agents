@@ -15,6 +15,7 @@ to it. Phase 6 supersedes the Phase-5 EV/Kelly risk engine.
 - Aggregate unsettled exposure remains capped at 50% of bankroll.
 - Passing is normal. The prompt no longer tells agents to bet every real lean.
 - Revised probabilities, market blending, EV gates, Kelly sizing, and minimum floors are gone.
+- Malformed Step-2 JSON gets one format-only retry; semantic rule violations are not retried.
 - The human challenger keeps its separate flat 25% manual cap.
 
 ## Examples
