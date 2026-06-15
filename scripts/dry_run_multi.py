@@ -34,10 +34,12 @@ GROUP = "X"
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 def _seed(path: Path) -> tuple:
+    """Create a throwaway database containing several synthetic fixtures."""
     conn = db.connect(path)
     db.init_db(conn)
     fixtures = []
@@ -56,6 +58,7 @@ def _seed(path: Path) -> tuple:
 
 
 def _telemetry(conn) -> None:
+    """Print model-call telemetry captured during the multi-fixture run."""
     rows = db.usage_by_model(conn)
     print(f"\n{'model':<18}{'calls':>7}{'tokens':>10}{'cost (USD)':>14}")
     total = 0.0
@@ -67,6 +70,7 @@ def _telemetry(conn) -> None:
 
 
 def main() -> None:
+    """Exercise the prediction pipeline across multiple synthetic fixtures."""
     ap = argparse.ArgumentParser(prog="dry_run_multi")
     ap.add_argument("--models", type=int, default=0,
                     help="cap competitors (0 = all; e.g. 2 for a cheaper run)")

@@ -80,6 +80,7 @@ START_BANKROLL = {ROPES: 16_000.0}  # others keep the seeded $1,000,000
 
 
 def _seed(path: Path):
+    """Create simultaneous fixtures and competitors in a throwaway database."""
     conn = db.connect(path)
     db.init_db(conn)
     tid = 901
@@ -126,6 +127,7 @@ def _stub_complete(decisions_for_model):
     captured = {}
 
     def fake(model_id, prompt, **kw):
+        """Return the canned decision for the prompt's fixture id."""
         fid = kw.get("fixture_id")
         captured[fid] = prompt
         pick, stake_pct = decisions_for_model[fid]
@@ -143,6 +145,7 @@ def _stub_complete(decisions_for_model):
 
 
 def _exposure_line(prompt: str) -> str | None:
+    """Extract the portfolio-exposure note from a generated betting prompt."""
     for part in prompt.split(". "):
         if "still awaiting a result" in part:
             return "NOTE: " + part.split("NOTE:", 1)[1].strip() + "."
@@ -150,6 +153,7 @@ def _exposure_line(prompt: str) -> str | None:
 
 
 def main() -> None:
+    """Verify stake caps across fixtures that share a kickoff window."""
     conn = _seed(Path(tempfile.mkdtemp(prefix="wc_sim_")) / "sim.db")
     models = {m.name: m for m in PREDICTION_MODELS[:3]}
 

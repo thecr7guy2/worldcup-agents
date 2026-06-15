@@ -57,6 +57,8 @@ def _completion(
     generation_id: str,
     inspect_prompt: Callable[[str], None] | None = None,
 ):
+    """Build a deterministic fake completion and optional prompt inspector."""
+
     def fake_complete(
         model_id: str,
         prompt: str,
@@ -66,6 +68,7 @@ def _completion(
         fixture_id: int | None = None,
         **_: object,
     ) -> tuple[str, ModelCall]:
+        """Return one canned provider response with call metadata."""
         assert model_id == MODEL.model_id
         if inspect_prompt:
             inspect_prompt(prompt)
@@ -86,6 +89,7 @@ def _completion(
 def _setup(
     fixture_id: int = 105,
 ) -> tuple[sqlite3.Connection, Fixture, MatchBriefing, OddsSnapshot]:
+    """Create a minimal fixture, briefing, and market snapshot."""
     path = Path(tempfile.mkdtemp()) / "phase6_contract.db"
     conn = db.connect(path)
     db.init_db(conn)
@@ -119,6 +123,7 @@ def _setup(
 
 
 def _blind_prediction(fixture_id: int = 105) -> Prediction:
+    """Construct the blind forecast used by reconciliation checks."""
     return Prediction(
         model_name=MODEL.name,
         fixture_id=fixture_id,
@@ -133,6 +138,7 @@ def _blind_prediction(fixture_id: int = 105) -> Prediction:
 
 
 def _verify_legacy_migration() -> None:
+    """Verify legacy rows migrate with nullable provenance fields."""
     path = Path(tempfile.mkdtemp()) / "legacy.db"
     conn = db.connect(path)
     conn.executescript("""
@@ -182,6 +188,7 @@ def _verify_legacy_migration() -> None:
 
 
 def _verify_human_actions() -> None:
+    """Verify human challenger actions follow the market contract."""
     path = Path(tempfile.mkdtemp()) / "human_pass.db"
     original_connect = db.connect
     conn = original_connect(path)
@@ -262,6 +269,7 @@ def _verify_human_actions() -> None:
 
 
 def main() -> None:
+    """Run market-reconciliation acceptance checks."""
     conn, fixture, briefing, odds = _setup()
 
     prediction_engine.complete = _completion(
@@ -297,6 +305,7 @@ def main() -> None:
     print("odds-hidden prediction + provenance + eligibility: PASS")
 
     def inspect_bet_prompt(prompt: str) -> None:
+        """Assert that the betting prompt exposes only allowed information."""
         assert "ONLY eligible outcomes are: away (Scotland) 53%" in prompt
         assert "Passing is a normal decision" in prompt
         assert "stake_pct" in prompt

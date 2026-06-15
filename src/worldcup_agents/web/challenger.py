@@ -75,6 +75,7 @@ def require_challenger(request: Request) -> str:
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -87,10 +88,14 @@ def _lock_at(kickoff: datetime) -> datetime:
 
 
 class UnlockBody(BaseModel):
+    """Passphrase submitted to unlock the private challenger session."""
+
     key: str
 
 
 class PredictBody(BaseModel):
+    """Human challenger's odds-hidden forecast payload."""
+
     fixture_id: int
     winner: Outcome  # home | draw | away (your honest 90' call, odds hidden)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -103,6 +108,8 @@ class PredictBody(BaseModel):
 
 
 class BetBody(BaseModel):
+    """Human challenger's post-odds betting payload."""
+
     fixture_id: int
     pick: str  # home | draw | away | pass
     stake: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
@@ -129,6 +136,7 @@ def _require_open_fixture(conn, fixture_id: int):
 
 
 def _odds_dict(conn, fixture_id: int) -> dict | None:
+    """Serialize the latest consensus odds for a fixture, if available."""
     o = db.consensus_odds(conn, fixture_id)
     if o is None:
         return None
@@ -164,6 +172,7 @@ def unlock(body: UnlockBody, response: Response) -> dict:
 
 @router.post("/logout")
 def logout(response: Response) -> dict:
+    """Clear the challenger session cookie."""
     response.delete_cookie(_COOKIE, path="/")
     return {"ok": True}
 
@@ -182,6 +191,7 @@ def state(name: str = Depends(require_challenger)) -> dict:
         teams: dict[int, str] = {}
 
         def team_name(tid: int | None, label: str | None) -> str:
+            """Resolve and cache a display name for one fixture side."""
             if tid is None:
                 return label or "TBD"
             if tid not in teams:

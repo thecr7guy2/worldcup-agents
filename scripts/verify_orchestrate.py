@@ -42,6 +42,7 @@ H_LATE = (BET_LEAD_HOURS + LATE_UPDATE_LEAD_HOURS) / 2.0
 def _fx(
     conn, fid, *, hours_from_now=None, kickoff=None, status=MatchStatus.SCHEDULED, **kw
 ):
+    """Insert a fixture with concise defaults for scheduler tests."""
     ko = kickoff or (NOW + timedelta(hours=hours_from_now))
     db.upsert_fixture(
         conn,
@@ -58,6 +59,7 @@ def _fx(
 
 
 def main() -> None:
+    """Run deterministic orchestrator scheduling checks."""
     tmp = Path(tempfile.mkdtemp()) / "wc_orch.db"
     conn = db.connect(tmp)
     db.init_db(conn)

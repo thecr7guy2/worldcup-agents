@@ -11,6 +11,7 @@ from worldcup_agents.llm import LLMError, complete
 
 
 def main() -> None:
+    """Send minimal completions to verify every configured OpenRouter model."""
     if not settings.openrouter_api_key:
         print("OPENROUTER_API_KEY not set — fill it into .env")
         return

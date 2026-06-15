@@ -43,10 +43,12 @@ from .models import Fixture, MatchStatus
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 def _hours_until(kickoff: datetime, now: datetime) -> float:
+    """Return fractional hours from ``now`` until kickoff."""
     return (kickoff - now).total_seconds() / 3600.0
 
 
@@ -220,6 +222,7 @@ def _postprocess(conn: sqlite3.Connection, fixture: Fixture, now: datetime) -> N
 
 
 def _new_summary() -> dict:
+    """Create the mutable counters collected during one orchestrator tick."""
     return {
         "results": 0,
         "settled": 0,
@@ -348,6 +351,7 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
 
 
 def _cmd_tick(args: argparse.Namespace) -> None:
+    """Run one scheduled pipeline pass and print its summary."""
     conn = db.connect()
     db.init_db(conn)
     s = tick(conn)
@@ -362,6 +366,7 @@ def _cmd_tick(args: argparse.Namespace) -> None:
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
+    """Print due work without performing any pipeline actions."""
     conn = db.connect()
     db.init_db(conn)
     now = _now()
@@ -385,6 +390,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the orchestrator command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.orchestrate")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

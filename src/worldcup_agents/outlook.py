@@ -64,10 +64,12 @@ _TIMEFRAMES = {
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 def _parse_team_list(raw: object, *, want: int | None = None) -> list[str]:
+    """Validate and normalize a model-provided list of team names."""
     if not isinstance(raw, list):
         raise LLMError(f"expected a list of teams, got {raw!r}")
     teams = [" ".join(str(t).strip().split()) for t in raw if str(t).strip()]
@@ -143,6 +145,7 @@ def ask_all(
 
 
 def format_outlook(o: TournamentOutlook) -> str:
+    """Render one recorded tournament outlook as Markdown."""
     semis = ", ".join(o.semifinalists)
     horses = ", ".join(o.dark_horses)
     return (
@@ -158,6 +161,7 @@ def format_outlook(o: TournamentOutlook) -> str:
 
 
 def _cmd_ask(args: argparse.Namespace) -> None:
+    """Run the outlook interview for every configured competitor."""
     conn = db.connect()
     db.init_db(conn)
     outlooks, errors = ask_all(conn, phase=args.phase, force=args.force)
@@ -171,6 +175,7 @@ def _cmd_ask(args: argparse.Namespace) -> None:
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
+    """Print previously recorded outlook interviews."""
     conn = db.connect()
     db.init_db(conn)
     outlooks = db.list_outlooks(conn, phase=args.phase)
@@ -182,6 +187,7 @@ def _cmd_show(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the tournament-outlook command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.outlook")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

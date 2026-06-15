@@ -33,6 +33,7 @@ def _team_index(conn: sqlite3.Connection) -> dict[int, Team]:
 
 
 def _now_utc() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -94,6 +95,7 @@ def serialize_fixture(fx: Fixture, teams: dict[int, Team], odds: dict | None) ->
 
 
 def _consensus_odds_dict(conn: sqlite3.Connection, fixture_id: int) -> dict | None:
+    """Serialize the latest consensus odds snapshot for one fixture."""
     snap = db.consensus_odds(conn, fixture_id)
     if snap is None:
         return None
@@ -311,6 +313,7 @@ def competitor_card(
 def _accuracy_index(
     conn: sqlite3.Connection, *, include_human: bool = False
 ) -> dict[str, dict]:
+    """Index accuracy standings by model name for competitor-card joins."""
     return {
         row["model"]: row
         for row in leaderboard.accuracy_standings(conn, include_human=include_human)
@@ -318,6 +321,7 @@ def _accuracy_index(
 
 
 def _usage_index(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Index aggregate provider usage by model name."""
     return {row["model_name"]: row for row in db.usage_by_model(conn)}
 
 

@@ -44,6 +44,7 @@ from .models import (
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -342,6 +343,7 @@ def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEn
 
 
 def _team_name(conn: sqlite3.Connection, team_id: int | None, label: str | None) -> str:
+    """Resolve a team id, falling back to an unresolved bracket label."""
     if team_id is not None:
         team = db.get_team(conn, team_id)
         if team:
@@ -350,6 +352,7 @@ def _team_name(conn: sqlite3.Connection, team_id: int | None, label: str | None)
 
 
 def _cmd_result(args: argparse.Namespace) -> None:
+    """Record a manual fixture result or postponement."""
     conn = db.connect()
     db.init_db(conn)
     fx = record_result(
@@ -380,6 +383,7 @@ def _cmd_result(args: argparse.Namespace) -> None:
 
 
 def _print_settlements(conn: sqlite3.Connection, settlements: list[Settlement]) -> None:
+    """Print settlement rows followed by the updated bankroll standings."""
     print(f"{'model':<18}{'fixture':>8}{'result':<8}{'payout':>14}{'pnl':>16}")
     for s in sorted(settlements, key=lambda x: (x.model_name, x.fixture_id)):
         print(
@@ -393,6 +397,7 @@ def _print_settlements(conn: sqlite3.Connection, settlements: list[Settlement]) 
 
 
 def _cmd_settle(args: argparse.Namespace) -> None:
+    """Settle every recorded bet for one finished fixture."""
     conn = db.connect()
     db.init_db(conn)
     fx = db.get_fixture(conn, args.fixture_id)
@@ -409,6 +414,7 @@ def _cmd_settle(args: argparse.Namespace) -> None:
 
 
 def _cmd_settle_day(args: argparse.Namespace) -> None:
+    """Settle a closed UTC matchday as one bankroll batch."""
     conn = db.connect()
     db.init_db(conn)
     settlements = settle_matchday(conn, args.matchday)
@@ -417,6 +423,7 @@ def _cmd_settle_day(args: argparse.Namespace) -> None:
 
 
 def _cmd_decay(args: argparse.Namespace) -> None:
+    """Apply and display idle-cash decay for one closed matchday."""
     conn = db.connect()
     db.init_db(conn)
     if db.matchday_decayed(conn, args.matchday):
@@ -432,6 +439,7 @@ def _cmd_decay(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the settlement command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.settlement")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

@@ -158,10 +158,12 @@ class Prediction(BaseModel):
 
     @property
     def has_score(self) -> bool:
+        """Return whether the prediction includes both scoreline values."""
         return self.pred_home_goals is not None and self.pred_away_goals is not None
 
     @property
     def has_distribution(self) -> bool:
+        """Return whether all three blind 1X2 probabilities are available."""
         return None not in (self.p_home, self.p_draw, self.p_away)
 
 
@@ -204,10 +206,12 @@ class Bet(BaseModel):
 
     @property
     def is_pass(self) -> bool:
+        """Return whether the model declined to risk money on the fixture."""
         return self.pick is None or self.stake <= 0
 
     @property
     def has_revised_distribution(self) -> bool:
+        """Return whether a legacy post-odds probability distribution is present."""
         return None not in (
             self.p_home_revised,
             self.p_draw_revised,

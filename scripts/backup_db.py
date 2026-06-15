@@ -23,6 +23,7 @@ KEEP_DAYS = 21
 
 
 def main() -> None:
+    """Create a timestamped SQLite backup and prune expired backup files."""
     if not DB.exists():
         sys.exit(f"{DB} not found — run from the repo root")
     DEST_DIR.mkdir(exist_ok=True)

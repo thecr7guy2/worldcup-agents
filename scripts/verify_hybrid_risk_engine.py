@@ -55,7 +55,10 @@ ODDS = OddsSnapshot(
 
 
 def _completion(payload: dict, generation_id: str = "tier-gen"):
+    """Build a deterministic fake completion for one response payload."""
+
     def fake_complete(model_id, prompt, *, model_name, step, fixture_id=None, **_):
+        """Return the canned payload with realistic call metadata."""
         return json.dumps(payload), ModelCall(
             model_name=model_name,
             step=step,
@@ -70,9 +73,11 @@ def _completion(payload: dict, generation_id: str = "tier-gen"):
 
 
 def _completion_sequence(responses: list[str | dict], prefix: str):
+    """Build a fake completion that consumes canned responses in order."""
     state = {"calls": 0, "prompts": []}
 
     def fake_complete(model_id, prompt, *, model_name, step, fixture_id=None, **_):
+        """Return the next canned response and capture its prompt."""
         index = state["calls"]
         state["calls"] += 1
         state["prompts"].append(prompt)
@@ -92,6 +97,7 @@ def _completion_sequence(responses: list[str | dict], prefix: str):
 
 
 def _setup(stage: Stage = Stage.GROUP) -> tuple:
+    """Create the minimal database state required by risk-engine checks."""
     path = Path(tempfile.mkdtemp()) / "tier.db"
     conn = db.connect(path)
     db.init_db(conn)
@@ -125,6 +131,7 @@ def _prediction(
     p_draw: float = 0.26,
     p_away: float = 0.53,
 ) -> Prediction:
+    """Construct a blind prediction with configurable probabilities."""
     probabilities = {
         Outcome.HOME: p_home,
         Outcome.DRAW: p_draw,
@@ -145,6 +152,7 @@ def _prediction(
 
 
 def _bet(conn, fixture, prediction, pick: str, stake_pct: object):
+    """Run one betting decision using a canned model response."""
     engine.complete = _completion(
         {
             "pick": pick,
@@ -166,6 +174,7 @@ def _bet(conn, fixture, prediction, pick: str, stake_pct: object):
 
 
 def _add_open_bet(conn, fixture_id: int, stake: float) -> None:
+    """Insert an unsettled bet used to test exposure limits."""
     db.upsert_fixture(
         conn,
         Fixture(
@@ -191,6 +200,7 @@ def _add_open_bet(conn, fixture_id: int, stake: float) -> None:
 
 
 def main() -> None:
+    """Run hybrid risk-engine acceptance checks."""
     clear = _prediction()
     assert engine._eligible_outcomes(clear) == {Outcome.AWAY: 0.53}
 

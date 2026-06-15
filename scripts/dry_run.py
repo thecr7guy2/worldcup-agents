@@ -44,6 +44,7 @@ ODDS = {
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -80,6 +81,7 @@ def _seed(path: Path) -> tuple[sqlite3.Connection, Fixture]:
 
 
 def _print_table(results: list[tuple]) -> None:
+    """Print compact prediction and betting results for each model."""
     print(
         f"\n{'model':<18}{'predict':<8}{'P(H/D/A)':>18}{'score':>6}{'conf':>7}"
         f"{'bet':>7}{'stake':>12}{'odds':>7}"
@@ -102,6 +104,7 @@ def _print_table(results: list[tuple]) -> None:
 
 
 def _print_telemetry(conn: sqlite3.Connection) -> None:
+    """Print aggregate token and cost telemetry from the dry-run database."""
     rows = db.usage_by_model(conn)
     print(f"\n{'model':<18}{'calls':>7}{'tokens':>10}{'cost (USD)':>14}")
     total = 0.0
@@ -115,6 +118,7 @@ def _print_telemetry(conn: sqlite3.Connection) -> None:
 
 
 def main() -> None:
+    """Run an isolated end-to-end prediction and betting smoke test."""
     parser = argparse.ArgumentParser(prog="dry_run")
     parser.add_argument(
         "--models",

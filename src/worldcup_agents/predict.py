@@ -163,6 +163,7 @@ Your previous malformed answer was:
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -287,6 +288,7 @@ names the factors that actually drove your forecast, as short lowercase tags (ex
     data = extract_json(text)
 
     def _prob(key: str) -> float:
+        """Read one finite, non-negative probability from the model response."""
         try:
             v = float(data[key])
         except (KeyError, ValueError, TypeError):
@@ -315,6 +317,7 @@ names the factors that actually drove your forecast, as short lowercase tags (ex
     pred_home_goals, pred_away_goals = _parse_score(data.get("most_likely_score"))
 
     def _xg(key: str) -> float | None:
+        """Read an optional finite, non-negative expected-goals value."""
         try:
             v = float(data[key])
         except (KeyError, ValueError, TypeError):
@@ -380,6 +383,7 @@ names the factors that actually drove your forecast, as short lowercase tags (ex
 
 
 def _odds_for(odds: OddsSnapshot, pick: Outcome) -> float:
+    """Return the decimal price corresponding to a selected 1X2 outcome."""
     return {Outcome.HOME: odds.home, Outcome.DRAW: odds.draw, Outcome.AWAY: odds.away}[
         pick
     ]
@@ -753,6 +757,7 @@ def run_fixture(
     db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
 
     def _run_one(model: ModelSpec) -> ModelRun:
+        """Run one competitor independently with its own SQLite connection."""
         own = db.connect(db_path) if db_path else conn
         try:
             # Never start after kickoff: a long tick, or a fixture queued behind others,
@@ -846,6 +851,7 @@ def format_reasoning(
 
 
 def _cmd_predict(args: argparse.Namespace) -> None:
+    """Run and display every model's prediction and bet for one fixture."""
     conn = db.connect()
     db.init_db(conn)
     runs = run_fixture(conn, args.fixture_id, force=args.force)
@@ -886,6 +892,7 @@ def _cmd_predict(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the prediction command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.predict")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("predict", help="run all models' predict+bet for a fixture")

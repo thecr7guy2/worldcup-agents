@@ -52,6 +52,7 @@ def fetch_schedule() -> dict:
 
 
 def _http_get(url: str, max_retries: int = 3, backoff: float = 3.0) -> dict:
+    """Fetch and decode JSON with bounded retries for transient failures."""
     last_err = ""
     for attempt in range(max_retries + 1):
         try:
@@ -116,6 +117,7 @@ def parse_schedule(raw: dict) -> tuple[list[Team], list[Fixture]]:
 
     # Sort all matches for deterministic id minting.
     def sort_key(m: dict) -> tuple:
+        """Return a stable chronological key for fixtures without source ids."""
         return (
             m.get("date", ""),
             m.get("time", ""),
