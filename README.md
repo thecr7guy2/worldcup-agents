@@ -13,6 +13,8 @@
 
 </div>
 
+![Seven AI agents gathered around a glowing football strategy table inside a futuristic stadium](assets/world-cup-agents-hero.png)
+
 ---
 
 ## 🌍 Welcome to the Arena
