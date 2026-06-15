@@ -626,6 +626,7 @@ def upsert_prediction(conn: sqlite3.Connection, p: Prediction) -> None:
 
 
 def _row_to_prediction(d: dict) -> Prediction:
+    """Convert a prediction database row into its typed domain model."""
     d["winner"] = Outcome(d["winner"])
     if d.get("predicted_advance"):
         d["predicted_advance"] = Outcome(d["predicted_advance"])
@@ -1102,6 +1103,7 @@ def upsert_outlook(conn: sqlite3.Connection, o: TournamentOutlook) -> None:
 
 
 def _row_to_outlook(d: dict) -> TournamentOutlook:
+    """Deserialize JSON list fields and build a tournament outlook model."""
     d["semifinalists"] = json.loads(d["semifinalists"])
     d["dark_horses"] = json.loads(d["dark_horses"])
     return TournamentOutlook(**d)

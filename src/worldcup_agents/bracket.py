@@ -103,6 +103,7 @@ def _compute_stats(matches: list[Fixture], team_ids: set[int]) -> dict[int, _Sta
 
 
 def _key3(stats: dict[int, _Stat], team_id: int) -> tuple[int, int, int]:
+    """Return a team's primary FIFA ranking tuple: points, goal difference, goals."""
     s = stats[team_id]
     return (s.pts, s.gd, s.gf)
 
@@ -337,6 +338,7 @@ def fetch_official_r32(
 
 
 def _pos_team(standings: dict[str, list[int]], pos: int, group: str) -> int | None:
+    """Resolve a one-based group position to a team id, if available."""
     order = standings.get(group, [])
     return order[pos - 1] if len(order) >= pos else None
 
@@ -487,6 +489,7 @@ def resolve_brackets(
 
 
 def _team_label(conn: sqlite3.Connection, tid: int | None, label: str | None) -> str:
+    """Return a resolved team name or the fixture's unresolved bracket label."""
     if tid is not None:
         t = db.get_team(conn, tid)
         if t:
@@ -495,6 +498,7 @@ def _team_label(conn: sqlite3.Connection, tid: int | None, label: str | None) ->
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
+    """Print provisional group standings and unresolved knockout slots."""
     conn = db.connect()
     db.init_db(conn)
     fixtures = db.list_fixtures(conn)
@@ -521,6 +525,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 
 def _cmd_resolve(args: argparse.Namespace) -> None:
+    """Resolve every currently knowable knockout bracket slot."""
     conn = db.connect()
     db.init_db(conn)
     counts = resolve_brackets(conn)
@@ -531,6 +536,7 @@ def _cmd_resolve(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the bracket command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.bracket")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

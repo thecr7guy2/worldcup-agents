@@ -26,6 +26,7 @@ _TTL_SECONDS = 6 * 60 * 60
 
 
 def _is_public(ip: str) -> bool:
+    """Return whether an address is safe to send to the external geo service."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:

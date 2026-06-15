@@ -30,6 +30,7 @@ NOW = datetime(2026, 6, 11, 12, 0, tzinfo=timezone.utc)
 
 
 def _bet(conn, model, fid, pick, stake, odds):
+    """Insert one bet used by settlement verification scenarios."""
     db.upsert_bet(
         conn,
         Bet(
@@ -44,6 +45,7 @@ def _bet(conn, model, fid, pick, stake, odds):
 
 
 def _fixture(conn, fid, stage, **kw):
+    """Insert a fixture with configurable state and result fields."""
     db.upsert_fixture(
         conn,
         Fixture(
@@ -58,6 +60,7 @@ def _fixture(conn, fid, stage, **kw):
 
 
 def main() -> None:
+    """Run settlement, re-buy, and postponement verification scenarios."""
     tmp = Path(tempfile.mkdtemp()) / "wc_settle_regression.db"
     conn = db.connect(tmp)
     db.init_db(conn)

@@ -32,7 +32,10 @@ _WARNINGS: list[str] = []
 
 
 class _Capture(logging.Handler):
+    """Capture bracket warnings for assertions without writing to stderr."""
+
     def emit(self, record: logging.LogRecord) -> None:
+        """Store one warning message."""
         _WARNINGS.append(record.getMessage())
 
 
@@ -61,6 +64,7 @@ def _g(fid, group, h, a, hg, ag):
 
 
 def test_standings_tiebreakers() -> None:
+    """Verify the implemented FIFA group-ordering criteria."""
     # Group A — ids 1..4. GD breaks 1st/2nd (T1 +5 vs T2 +1); H2H breaks 3rd/4th
     # (T3,T4 both 3pts/-3/1, T4 beat T3 head-to-head).
     a = [
@@ -98,6 +102,7 @@ def test_standings_tiebreakers() -> None:
 
 
 def test_rank_thirds() -> None:
+    """Verify cross-group ranking of third-placed teams."""
     # Two groups; each third has 3pts. X's third (id 3) beats 4th 4-0 (GD+2);
     # Y's third (id 7) beats 4th 1-0 (GD-1). So id 3 outranks id 7 → top of thirds.
     x = [
@@ -121,6 +126,7 @@ def test_rank_thirds() -> None:
 
 
 def test_unbreakable_tie_warns() -> None:
+    """Verify untracked fair-play ties emit a review warning."""
     # T1,T2 fully identical and DREW head-to-head -> ranking falls back to ascending id
     # and must emit a loud WARNING (criteria 5-6 untracked). Same for T3,T4.
     g = [
@@ -142,6 +148,7 @@ def test_unbreakable_tie_warns() -> None:
 
 
 def test_winner_loser() -> None:
+    """Verify winner and loser bracket labels resolve correctly."""
     tmp = Path(tempfile.mkdtemp()) / "wc_wl.db"
     conn = db.connect(tmp)
     db.init_db(conn)
@@ -240,6 +247,7 @@ QUAL_GROUPS = set(THIRD_SLOT_GROUP.values())  # {A,B,C,D,F,G,H,K}
 
 
 def _seed_real_schedule(conn) -> None:
+    """Seed the published tournament schedule into a test database."""
     teams, fixtures = parse_schedule(fetch_schedule())
     for t in teams:
         db.upsert_team(conn, t)
@@ -271,7 +279,9 @@ def _synth_group_results(conn) -> None:
 
 
 def _expected_pair(standings, fx) -> tuple[int, int]:
+    """Resolve the expected R32 pairing from standings and slot labels."""
     def side(label, is_home):
+        """Resolve one position or qualifying-third slot."""
         pos = bracket._parse_pos(label)
         if pos:
             return standings[pos[1]][pos[0] - 1]
@@ -281,6 +291,7 @@ def _expected_pair(standings, fx) -> tuple[int, int]:
 
 
 def test_r32_real_schedule() -> None:
+    """Verify R32 resolution against the published fixture structure."""
     tmp = Path(tempfile.mkdtemp()) / "wc_r32.db"
     conn = db.connect(tmp)
     db.init_db(conn)
@@ -293,6 +304,7 @@ def test_r32_real_schedule() -> None:
     calls = {"n": 0}
 
     def counting_stub(c):
+        """Count unexpected official-bracket fetch attempts."""
         calls["n"] += 1
         return []
 
@@ -317,6 +329,7 @@ def test_r32_real_schedule() -> None:
     expected = {f.id: _expected_pair(standings, f) for f in r32}
 
     def name(tid):
+        """Resolve a team id to its seeded display name."""
         return db.get_team(conn, tid).name
 
     correct_pairs = [(name(h), name(a)) for h, a in (expected[f.id] for f in r32)]
@@ -392,6 +405,7 @@ def test_resolve_brackets_idle() -> None:
     calls = {"n": 0}
 
     def counting_stub(c):
+        """Count official-bracket fetch attempts during an idle tick."""
         calls["n"] += 1
         return []
 
@@ -405,6 +419,7 @@ def test_resolve_brackets_idle() -> None:
 
 
 def main() -> None:
+    """Run all bracket acceptance checks."""
     test_standings_tiebreakers()
     test_rank_thirds()
     test_unbreakable_tie_warns()

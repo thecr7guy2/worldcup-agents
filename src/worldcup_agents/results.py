@@ -31,10 +31,12 @@ you say the match is not finished."""
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 def _team_name(conn: sqlite3.Connection, team_id: int | None, label: str | None) -> str:
+    """Resolve a team id, falling back to an unresolved bracket label."""
     if team_id is not None:
         team = db.get_team(conn, team_id)
         if team:
@@ -43,6 +45,7 @@ def _team_name(conn: sqlite3.Connection, team_id: int | None, label: str | None)
 
 
 def _build_prompt(home: str, away: str, fixture: Fixture) -> str:
+    """Build the strict result-research prompt for one fixture."""
     venue = f" at {fixture.venue}" if fixture.venue else ""
     return f"""Match: {home} (home) vs {away} (away) — FIFA World Cup 2026, \
 {fixture.stage.value}, kicked off {fixture.kickoff.isoformat()} (UTC){venue}.
@@ -174,6 +177,7 @@ def ingest_result(
     away = _team_name(conn, fixture.away_id, fixture.away_label)
 
     def _one_read() -> dict:
+        """Perform and validate one independent result-research call."""
         text, call = complete(
             model.model_id,
             _build_prompt(home, away, fixture),
@@ -213,6 +217,7 @@ def ingest_result(
 
 
 def _describe(conn: sqlite3.Connection, fx: Fixture) -> str:
+    """Render a concise human-readable fixture result."""
     home = _team_name(conn, fx.home_id, fx.home_label)
     away = _team_name(conn, fx.away_id, fx.away_label)
     if fx.status == MatchStatus.POSTPONED:
@@ -232,6 +237,7 @@ def _describe(conn: sqlite3.Connection, fx: Fixture) -> str:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> None:
+    """Research and record the result for one requested fixture."""
     conn = db.connect()
     db.init_db(conn)
     fx = ingest_result(conn, args.fixture_id, force=args.force)
@@ -244,6 +250,7 @@ def _cmd_ingest(args: argparse.Namespace) -> None:
 
 
 def _cmd_due(args: argparse.Namespace) -> None:
+    """Research every kicked-off fixture that remains unresolved."""
     conn = db.connect()
     db.init_db(conn)
     now = _now()
@@ -269,6 +276,7 @@ def _cmd_due(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the result-ingestion command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.results")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

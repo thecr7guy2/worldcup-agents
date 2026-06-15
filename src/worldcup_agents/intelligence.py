@@ -129,6 +129,7 @@ def _strip_preamble(text: str) -> str:
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
@@ -750,6 +751,7 @@ Facts only. No odds. No prediction. Do not restate the team's baseline identity.
 
 
 def _cmd_brief(args: argparse.Namespace) -> None:
+    """Build and print the shared briefing for one fixture."""
     conn = db.connect()
     db.init_db(conn)
     briefing = brief_fixture(conn, args.fixture_id, force=args.force)
@@ -757,6 +759,7 @@ def _cmd_brief(args: argparse.Namespace) -> None:
 
 
 def _cmd_dossier(args: argparse.Namespace) -> None:
+    """Build and print one team's current research dossier."""
     conn = db.connect()
     db.init_db(conn)
     team = db.get_team(conn, args.team_id)
@@ -770,6 +773,7 @@ def _cmd_dossier(args: argparse.Namespace) -> None:
 
 
 def _cmd_postmatch(args: argparse.Namespace) -> None:
+    """Build a post-match recap and optionally fold it into the dossier."""
     conn = db.connect()
     db.init_db(conn)
     team = db.get_team(conn, args.team_id)
@@ -793,6 +797,7 @@ def _cmd_postmatch(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the intelligence command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.intelligence")
     sub = parser.add_subparsers(dest="cmd", required=True)
     force_kw = {"action": "store_true", "help": "rebuild even if cached rows exist"}

@@ -176,6 +176,7 @@ def brier_standings(
 
 
 def _print_bankroll(conn: sqlite3.Connection) -> None:
+    """Print the bankroll standings as a fixed-width terminal table."""
     print("Bankroll leaderboard — best gambler")
     print(f"{'#':<3}{'model':<18}{'bankroll':>16}{'lives':>7}{'status':>9}")
     for i, c in enumerate(bankroll_standings(conn), start=1):
@@ -186,6 +187,7 @@ def _print_bankroll(conn: sqlite3.Connection) -> None:
 
 
 def _print_accuracy(conn: sqlite3.Connection) -> None:
+    """Print outcome, scoreline, and knockout-advancer accuracy standings."""
     rows = accuracy_standings(conn)
     print(
         "Accuracy leaderboard — best predictor "
@@ -206,6 +208,7 @@ def _print_accuracy(conn: sqlite3.Connection) -> None:
 
 
 def _print_brier(conn: sqlite3.Connection) -> None:
+    """Print blind-forecast Brier scores, with the uniform baseline."""
     rows = brier_standings(conn)
     print(
         "Reasoning leaderboard — Brier score on the blind Step-1 forecast "
@@ -221,6 +224,7 @@ def _print_brier(conn: sqlite3.Connection) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the leaderboard command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.leaderboard")
     parser.add_argument(
         "which",

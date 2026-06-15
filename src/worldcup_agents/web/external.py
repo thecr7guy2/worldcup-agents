@@ -30,6 +30,7 @@ router = APIRouter(prefix="/api/external", tags=["external"])
 
 
 def _feature_enabled() -> bool:
+    """Return whether the friend API has been configured."""
     return bool(settings.friend_api_key)
 
 
@@ -44,6 +45,7 @@ def require_api_key(request: Request) -> None:
 
 
 def _team_name(conn: sqlite3.Connection, tid: int | None, label: str | None) -> str:
+    """Resolve a team id, falling back to its bracket label."""
     if tid is not None:
         t = db.get_team(conn, tid)
         if t:
@@ -57,6 +59,7 @@ def _date_of(fx: Fixture) -> str:
 
 
 def _fixture_brief(conn: sqlite3.Connection, fx: Fixture) -> dict:
+    """Serialize the identifying fields shared by external fixture responses."""
     return {
         "fixture_id": fx.id,
         "date": _date_of(fx),

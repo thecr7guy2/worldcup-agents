@@ -38,6 +38,7 @@ DAY = "2026-06-11"
 
 
 def _fixture(conn, fid, **kw):
+    """Insert a fixture with configurable result fields for scoring checks."""
     db.upsert_fixture(
         conn,
         Fixture(
@@ -53,6 +54,7 @@ def _fixture(conn, fid, **kw):
 
 
 def main() -> None:
+    """Run leaderboard scoring and idle-decay checks."""
     tmp = Path(tempfile.mkdtemp()) / "wc_scoring.db"
     conn = db.connect(tmp)
     db.init_db(conn)
@@ -157,6 +159,7 @@ def main() -> None:
     record_result(conn, 803, 1, 1, extra_time=True, penalties=True, advanced_id=1)
 
     def pred(model, fid, hg, ag, advances=None):
+        """Insert one prediction used by the scoring scenarios."""
         winner = Outcome.HOME if hg > ag else Outcome.AWAY if hg < ag else Outcome.DRAW
         db.upsert_prediction(
             conn,

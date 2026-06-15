@@ -22,6 +22,7 @@ from worldcup_agents.results import _apply_parsed, _parse_result, ingest_result
 
 
 def _fx(conn, fid, stage, kickoff):
+    """Insert and return a fixture for result-ingestion checks."""
     db.upsert_fixture(
         conn,
         Fixture(id=fid, stage=stage, kickoff=kickoff, home_id=1, away_id=2),
@@ -30,6 +31,7 @@ def _fx(conn, fid, stage, kickoff):
 
 
 def expect_error(fn, label):
+    """Assert that a callable raises the expected LLM validation error."""
     try:
         fn()
     except LLMError:
@@ -38,6 +40,7 @@ def expect_error(fn, label):
 
 
 def main() -> None:
+    """Run result parsing and persistence verification scenarios."""
     tmp = Path(tempfile.mkdtemp()) / "wc_results.db"
     conn = db.connect(tmp)
     db.init_db(conn)

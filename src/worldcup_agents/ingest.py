@@ -28,6 +28,7 @@ from .sources.openfootball import fetch_schedule, parse_schedule
 
 
 def cmd_seed(args: argparse.Namespace) -> None:
+    """Populate the database with canonical teams and the published fixture list."""
     conn = connect(DEFAULT_DB_PATH)
     init_db(conn)
 
@@ -95,6 +96,7 @@ def poll_odds(conn) -> int:
 
 
 def cmd_odds(args: argparse.Namespace) -> None:
+    """Fetch and persist the latest consensus odds snapshot."""
     conn = connect(DEFAULT_DB_PATH)
 
     print("Fetching odds from The Odds API...")
@@ -107,6 +109,7 @@ def cmd_odds(args: argparse.Namespace) -> None:
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
+    """Validate seeded data against the tournament's acceptance criteria."""
     conn = connect(DEFAULT_DB_PATH)
     errors: list[str] = []
 
@@ -209,6 +212,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse and dispatch the ingestion command-line interface."""
     parser = argparse.ArgumentParser(prog="worldcup_agents.ingest")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("seed", help="Seed teams and fixtures from openfootball")

@@ -49,11 +49,13 @@ def get_conn() -> sqlite3.Connection:
 
 @app.get("/api/health")
 def health() -> dict:
+    """Return a lightweight service-health response."""
     return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/overview")
 def api_overview() -> dict:
+    """Return aggregate data for the Arena homepage."""
     conn = get_conn()
     try:
         return stats.overview(conn)
@@ -63,6 +65,7 @@ def api_overview() -> dict:
 
 @app.get("/api/competitors")
 def api_competitors() -> list[dict]:
+    """Return public summaries for every competitor."""
     conn = get_conn()
     try:
         return stats.list_competitors(conn)
@@ -72,6 +75,7 @@ def api_competitors() -> list[dict]:
 
 @app.get("/api/competitors/{name}")
 def api_competitor(name: str) -> dict:
+    """Return one public competitor profile or a 404 response."""
     conn = get_conn()
     try:
         card = stats.competitor_detail(conn, name)
@@ -84,6 +88,7 @@ def api_competitor(name: str) -> dict:
 
 @app.get("/api/leaderboard/bankroll")
 def api_leaderboard_bankroll() -> list[dict]:
+    """Return bankroll standings ordered by the statistics layer."""
     conn = get_conn()
     try:
         return stats.leaderboard_bankroll(conn)
@@ -93,6 +98,7 @@ def api_leaderboard_bankroll() -> list[dict]:
 
 @app.get("/api/leaderboard/accuracy")
 def api_leaderboard_accuracy() -> list[dict]:
+    """Return prediction-accuracy standings."""
     conn = get_conn()
     try:
         return stats.leaderboard_accuracy(conn)
@@ -102,6 +108,7 @@ def api_leaderboard_accuracy() -> list[dict]:
 
 @app.get("/api/leaderboard/brier")
 def api_leaderboard_brier() -> dict:
+    """Return blind-forecast Brier standings and baseline metadata."""
     conn = get_conn()
     try:
         return stats.leaderboard_brier(conn)
@@ -111,6 +118,7 @@ def api_leaderboard_brier() -> dict:
 
 @app.get("/api/fixtures")
 def api_fixtures(day: str | None = None, stage: str | None = None) -> list[dict]:
+    """Return fixture summaries, optionally filtered by UTC day or stage."""
     conn = get_conn()
     try:
         return stats.list_fixtures(conn, day=day, stage=stage)
@@ -120,6 +128,7 @@ def api_fixtures(day: str | None = None, stage: str | None = None) -> list[dict]
 
 @app.get("/api/fixtures/{fixture_id}")
 def api_fixture(fixture_id: int) -> dict:
+    """Return one fixture's public detail or a 404 response."""
     conn = get_conn()
     try:
         detail = stats.fixture_detail(conn, fixture_id)
@@ -132,6 +141,7 @@ def api_fixture(fixture_id: int) -> dict:
 
 @app.get("/api/today")
 def api_today() -> dict:
+    """Return fixtures scheduled for the current UTC date."""
     conn = get_conn()
     try:
         today = datetime.now(timezone.utc).date().isoformat()
@@ -142,6 +152,7 @@ def api_today() -> dict:
 
 @app.get("/api/telemetry")
 def api_telemetry() -> dict:
+    """Return model-call token, cost, and provider telemetry."""
     conn = get_conn()
     try:
         return stats.telemetry(conn)

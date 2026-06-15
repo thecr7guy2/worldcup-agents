@@ -26,6 +26,8 @@ router = APIRouter(tags=["geo"])
 
 
 class TrackBody(BaseModel):
+    """Visitor beacon payload forwarded by the trusted Next.js edge route."""
+
     visitor_id: str
     ip: str | None = None
     is_challenger: bool = False
