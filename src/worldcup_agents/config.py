@@ -89,8 +89,10 @@ STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
 BET_ELIGIBILITY_WINDOW = 0.10
 
 # Fixed conviction tiers. The prompt offers only the tiers allowed by the current stage;
-# the engine validates them and converts the chosen percentage into dollars.
-BET_STAKE_TIERS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30)
+# the engine validates them and converts the chosen percentage into dollars. The 2% tier
+# is the "I like my football read, but the price is short" option, added after early
+# phase-6 rows passed too often on correctly identified favourites.
+BET_STAKE_TIERS: tuple[float, ...] = (0.02, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30)
 
 # Aggressive stage ceilings keep early variance bounded while preserving large wagers.
 # Group matches top out at 20%, the first two knockout rounds at 25%, and the quarterfinals

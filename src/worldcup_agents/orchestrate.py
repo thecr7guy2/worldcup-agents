@@ -325,7 +325,9 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
             intelligence.build_late_update(
                 conn, f, cutoff=now, max_age_minutes=LATE_UPDATE_REFRESH_MIN
             )
-        except Exception as e:  # noqa: BLE001 - best-effort; the cached update still stands
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 - best-effort; the cached update still stands
             s["errors"].append(f"late_refresh {f.id}: {e}")
         try:
             runs = predict.run_fixture(conn, f.id)

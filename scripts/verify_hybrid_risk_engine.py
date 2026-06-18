@@ -326,7 +326,13 @@ def main() -> None:
         "malformed JSON retries once, logs both calls, then succeeds or fails loudly: PASS"
     )
 
-    assert stage_stake_tiers(Stage.GROUP.value) == (0.05, 0.10, 0.15, 0.20)
+    assert stage_stake_tiers(Stage.GROUP.value) == (
+        0.02,
+        0.05,
+        0.10,
+        0.15,
+        0.20,
+    )
     assert stage_stake_tiers(Stage.R16.value)[-1] == 0.25
     assert stage_stake_tiers(Stage.QF.value)[-1] == 0.30
 

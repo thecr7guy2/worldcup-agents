@@ -449,10 +449,9 @@ def build_late_update(
     if not force:
         existing = db.get_late_update(conn, fixture.id)
         if existing is not None:
-            age_ok = (
-                max_age_minutes is None
-                or (cutoff - existing.cutoff_at) <= timedelta(minutes=max_age_minutes)
-            )
+            age_ok = max_age_minutes is None or (
+                cutoff - existing.cutoff_at
+            ) <= timedelta(minutes=max_age_minutes)
             if age_ok:
                 return existing
 

@@ -50,8 +50,12 @@ def _build_prompt(home: str, away: str, fixture: Fixture) -> str:
     return f"""Match: {home} (home) vs {away} (away) — FIFA World Cup 2026, \
 {fixture.stage.value}, kicked off {fixture.kickoff.isoformat()} (UTC){venue}.
 
-Using web search, find the OFFICIAL result of THIS specific match. I need the score at \
-the end of NORMAL TIME (90 minutes + stoppage), NOT including extra time or penalties.
+Using web search, find the OFFICIAL result of THIS specific match. Check FIFA's match \
+centre or match report first. If FIFA is not available or is ambiguous, corroborate with \
+at least one major sports outlet; do not rely on live-score aggregators alone.
+
+I need the score at the end of NORMAL TIME (90 minutes + stoppage), NOT including extra \
+time or penalties.
 
 Respond with ONLY a JSON object, no other text:
 {{"status": "finished" | "not_finished" | "postponed",
@@ -60,7 +64,8 @@ Respond with ONLY a JSON object, no other text:
   "went_extra_time": <true|false>,
   "went_penalties": <true|false>,
   "advanced": "home" | "away" | null,
-  "source": "<source name + date>"}}
+  "source": "<source name + date>",
+  "source_url": "<canonical source URL>"}}
 
 Rules:
 - home_goals_90 / away_goals_90 are {home}'s and {away}'s goals after 90 minutes of \
@@ -71,7 +76,8 @@ result from a reliable source: status="not_finished", goals null. Do NOT guess.
 score (a draw), set went_extra_time / went_penalties accordingly, and set "advanced" to \
 the team that ultimately progressed (penalties count for advancing, NOT for the 90' score).
 - Group-stage matches: "advanced" must be null.
-- Postponed or abandoned: status="postponed"."""
+- Postponed or abandoned: status="postponed".
+- Prefer a FIFA URL in source_url whenever FIFA has published the match page/report."""
 
 
 def _parse_result(data: dict, fixture: Fixture) -> dict:
@@ -188,6 +194,7 @@ def ingest_result(
             max_tokens=3000,  # headroom for reasoning models (tokens spent thinking)
             temperature=0.0,  # factual extraction — deterministic
             web_search=True,
+            web_max_results=8,  # enough room to surface FIFA + corroborating outlets
         )
         db.log_model_call(conn, call)
         return _parse_result(extract_json(text), fixture)

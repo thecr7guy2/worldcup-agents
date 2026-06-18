@@ -17,12 +17,14 @@ from pathlib import Path
 # Phase 6 removes the probability machinery from Step 2. The immutable blind forecast defines
 # eligibility: a pick must sit within 10 points of the top read. Odds choose among eligible
 # outcomes; the model requests a fixed conviction tier; the engine only enforces eligibility,
-# the stage tier ceiling, and aggregate exposure. Passing is explicitly normal.
+# the stage tier ceiling, and aggregate exposure. A later prompt/rules revision added a 2%
+# tier and made small favourite bets the default for strong football reads after early phase-6
+# rows proved too pass-heavy.
 EXPERIMENT_PHASE = "phase_6_coherent_tier_betting"
 
 FORECAST_PROMPT_VERSION = "forecast_v3_calibrated_spread"
-BET_PROMPT_VERSION = "bet_v10_coherence_voice_fixed_tiers_format_retry"
-BETTING_RULES_VERSION = "rules_v8_gap10_tiers_stage20_25_30_exposure50"
+BET_PROMPT_VERSION = "bet_v11_small_tier_active_betting"
+BETTING_RULES_VERSION = "rules_v9_gap10_tiers2_5_10_15_20_25_30_exposure50"
 
 HUMAN_FORECAST_VERSION = "human_forecast_v1"
 HUMAN_BET_VERSION = "human_bet_v1"

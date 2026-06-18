@@ -280,6 +280,7 @@ def _synth_group_results(conn) -> None:
 
 def _expected_pair(standings, fx) -> tuple[int, int]:
     """Resolve the expected R32 pairing from standings and slot labels."""
+
     def side(label, is_home):
         """Resolve one position or qualifying-third slot."""
         pos = bracket._parse_pos(label)

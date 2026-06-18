@@ -79,7 +79,7 @@ large wager on an outcome the same model rated clearly unlikely (`53/26/21`).
 
 Stake sizing uses fixed conviction tiers instead of Kelly or an EV formula:
 
-- Group: 5%, 10%, 15%, 20%.
+- Group: 2%, 5%, 10%, 15%, 20%.
 - Round of 32 / Round of 16: add 25%.
 - Quarterfinal onward: add 30%.
 

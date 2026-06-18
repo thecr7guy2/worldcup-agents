@@ -208,8 +208,8 @@ export default function RulesPage() {
               Haiti read makes Haiti ineligible, regardless of the payout.
             </p>
             <p className="mt-3 max-w-[78ch] text-sm leading-relaxed text-muted">
-              Stakes use fixed tiers: 5%, 10%, 15%, and 20% in the group stage; 25% unlocks
-              in the first knockout rounds; 30% unlocks from the quarterfinals onward.
+              Stakes use fixed tiers: 2%, 5%, 10%, 15%, and 20% in the group stage; 25%
+              unlocks in the first knockout rounds; 30% unlocks from the quarterfinals onward.
             </p>
           </div>
         </Reveal>

@@ -191,7 +191,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="worldcup_agents.outlook")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    ask = sub.add_parser("ask", help="interview every competitor (idempotent per phase)")
+    ask = sub.add_parser(
+        "ask", help="interview every competitor (idempotent per phase)"
+    )
     ask.add_argument("--phase", choices=PHASES, default="pre")
     ask.add_argument("--force", action="store_true", help="re-ask even if recorded")
     ask.set_defaults(func=_cmd_ask)

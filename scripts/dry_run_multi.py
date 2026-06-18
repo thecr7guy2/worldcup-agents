@@ -47,12 +47,28 @@ def _seed(path: Path) -> tuple:
         hid, aid = team_id_for(home), team_id_for(away)
         db.upsert_team(conn, Team(id=hid, name=home, group=GROUP))
         db.upsert_team(conn, Team(id=aid, name=away, group=GROUP))
-        fx = Fixture(id=fid, stage=Stage.GROUP, group=GROUP,
-                     kickoff=_now() + timedelta(hours=6), venue="Dry-Run Stadium",
-                     home_id=hid, away_id=aid, status=MatchStatus.SCHEDULED)
+        fx = Fixture(
+            id=fid,
+            stage=Stage.GROUP,
+            group=GROUP,
+            kickoff=_now() + timedelta(hours=6),
+            venue="Dry-Run Stadium",
+            home_id=hid,
+            away_id=aid,
+            status=MatchStatus.SCHEDULED,
+        )
         db.upsert_fixture(conn, fx)
-        db.upsert_odds_snapshot(conn, OddsSnapshot(fixture_id=fid, captured_at=_now(),
-            bookmaker="consensus", home=odds["home"], draw=odds["draw"], away=odds["away"]))
+        db.upsert_odds_snapshot(
+            conn,
+            OddsSnapshot(
+                fixture_id=fid,
+                captured_at=_now(),
+                bookmaker="consensus",
+                home=odds["home"],
+                draw=odds["draw"],
+                away=odds["away"],
+            ),
+        )
         fixtures.append(fx)
     return conn, fixtures
 
@@ -65,18 +81,26 @@ def _telemetry(conn) -> None:
     for r in rows:
         cost = r["cost_usd"] or 0.0
         total += cost
-        print(f"{r['model_name']:<18}{r['calls']:>7}{(r['tokens'] or 0):>10,}{cost:>14.4f}")
+        print(
+            f"{r['model_name']:<18}{r['calls']:>7}{(r['tokens'] or 0):>10,}{cost:>14.4f}"
+        )
     print(f"{'TOTAL':<18}{'':>7}{'':>10}{total:>14.4f}")
 
 
 def main() -> None:
     """Exercise the prediction pipeline across multiple synthetic fixtures."""
     ap = argparse.ArgumentParser(prog="dry_run_multi")
-    ap.add_argument("--models", type=int, default=0,
-                    help="cap competitors (0 = all; e.g. 2 for a cheaper run)")
+    ap.add_argument(
+        "--models",
+        type=int,
+        default=0,
+        help="cap competitors (0 = all; e.g. 2 for a cheaper run)",
+    )
     args = ap.parse_args()
     if not openrouter_ready():
-        raise SystemExit("OPENROUTER_API_KEY is not set — fill .env before the dry run.")
+        raise SystemExit(
+            "OPENROUTER_API_KEY is not set — fill .env before the dry run."
+        )
 
     models = PREDICTION_MODELS[: args.models] if args.models else PREDICTION_MODELS
     conn, fixtures = _seed(Path(tempfile.mkdtemp(prefix="wc_multidry_")) / "multi.db")
@@ -87,7 +111,9 @@ def main() -> None:
         h, a = db.get_team(conn, fx.home_id).name, db.get_team(conn, fx.away_id).name
         print(f"  · {fx.id}  {h} vs {a}")
     print(f"  competitors: {len(models)} ({', '.join(m.name for m in models)})")
-    print("  NOTE: spends real OpenRouter credit (2 briefings + web search + reasoning).")
+    print(
+        "  NOTE: spends real OpenRouter credit (2 briefings + web search + reasoning)."
+    )
     print("=" * 80)
 
     # --- Brief both fixtures up front (each: dossiers + pre-match reports + late update) ---
@@ -101,14 +127,18 @@ def main() -> None:
             _telemetry(conn)
             raise SystemExit(1)
         try:
-            lates[fx.id] = intelligence.build_late_update(conn, fx, cutoff=_now()).content
+            lates[fx.id] = intelligence.build_late_update(
+                conn, fx, cutoff=_now()
+            ).content
         except Exception as e:  # noqa: BLE001
             print(f"  ⚠️  late update unavailable ({type(e).__name__}) — continuing")
             lates[fx.id] = None
 
     # --- Bet phase, FIXTURE-MAJOR (match 1 for everyone, then match 2) ---
     failures: list[tuple[str, str]] = []
-    for fx in fixtures:  # order matters: match-1 stakes must be open when match 2 is sized
+    for (
+        fx
+    ) in fixtures:  # order matters: match-1 stakes must be open when match 2 is sized
         h, a = db.get_team(conn, fx.home_id).name, db.get_team(conn, fx.away_id).name
         odds = db.consensus_odds(conn, fx.id)
         print(f"\n{'=' * 80}\nMATCH {fx.id}: {h} vs {a}\n{'=' * 80}")
@@ -119,21 +149,30 @@ def main() -> None:
             ostake, ocount = db.open_exposure(conn, model.name)
             note = predict._exposure_note(bankroll, ostake, ocount)
             try:
-                pred = predict.predict(conn, model, fx, briefs[fx.id], h, a,
-                                       late_update=lates[fx.id])
+                pred = predict.predict(
+                    conn, model, fx, briefs[fx.id], h, a, late_update=lates[fx.id]
+                )
                 b = predict.bet(conn, model, fx, pred, odds, bankroll, h, a)
             except Exception as e:  # noqa: BLE001 — surface, never abort the others
                 failures.append((f"{model.name}@{fx.id}", f"{type(e).__name__}: {e}"))
                 print(f"  ✗ {model.name}: {type(e).__name__}: {e}")
                 continue
-            verdict = (f"{b.pick.value.upper()} ${b.stake:,.0f} @ {b.odds_at_bet}"
-                       if not b.is_pass else "pass")
-            probs = (f"  P(H/D/A) {pred.p_home:.0%}/{pred.p_draw:.0%}/{pred.p_away:.0%}"
-                     if pred.has_distribution else "")
+            verdict = (
+                f"{b.pick.value.upper()} ${b.stake:,.0f} @ {b.odds_at_bet}"
+                if not b.is_pass
+                else "pass"
+            )
+            probs = (
+                f"  P(H/D/A) {pred.p_home:.0%}/{pred.p_draw:.0%}/{pred.p_away:.0%}"
+                if pred.has_distribution
+                else ""
+            )
             print(f"\n  {model.name}  (bankroll ${bankroll:,.0f})")
             if note:
                 print(f"    exposure note IN PROMPT → {note.strip()}")
-            print(f"    predict: {pred.winner.value}{probs} · conf {pred.confidence:.2f}")
+            print(
+                f"    predict: {pred.winner.value}{probs} · conf {pred.confidence:.2f}"
+            )
             print(f"    BET: {verdict}")
             if b.reasoning:
                 print(f"    why: {b.reasoning[:240]}")
@@ -144,8 +183,10 @@ def main() -> None:
         for who, err in failures:
             print(f"   - {who}: {err}")
     else:
-        print("✅ Every model produced valid predictions + bets on BOTH matches "
-              "(exposure note parsed cleanly).")
+        print(
+            "✅ Every model produced valid predictions + bets on BOTH matches "
+            "(exposure note parsed cleanly)."
+        )
     _telemetry(conn)
 
 
