@@ -12,11 +12,16 @@ from datetime import datetime, timezone
 
 from .. import db, leaderboard
 from ..config import (
+    BET_ELIGIBILITY_WINDOW,
     CHALLENGER_PUBLIC,
+    MATCHDAY_SHORTFALL_PENALTY_FRACTION,
     MAX_LIVES,
     MAX_STAKE_FRACTION,
     STARTING_BANKROLL,
+    stage_matchday_target_fraction,
+    stage_stake_tiers,
 )
+from ..llm import LLMError, extract_json
 from ..models import Competitor, Fixture, MatchStatus, Team
 from . import agents_meta
 from .flags import code_for, iso_for
@@ -158,6 +163,14 @@ def fixture_detail(conn: sqlite3.Connection, fixture_id: int) -> dict | None:
             (fixture_id,),
         )
     }
+    bet_responses = {
+        r["model_name"]: r["response_text"]
+        for r in conn.execute(
+            "SELECT model_name, response_text FROM model_call "
+            "WHERE fixture_id = ? AND step = 'bet' ORDER BY created_at",
+            (fixture_id,),
+        )
+    }
     setts = {
         r["model_name"]: dict(r)
         for r in conn.execute(
@@ -176,10 +189,135 @@ def fixture_detail(conn: sqlite3.Connection, fixture_id: int) -> dict | None:
                 "prediction": preds.get(m),
                 "bet": bets.get(m),
                 "settlement": setts.get(m),
+                "decision_receipt": _decision_receipt(
+                    fx,
+                    preds.get(m),
+                    bets.get(m),
+                    _consensus_odds_dict(conn, fixture_id),
+                    bet_responses.get(m),
+                ),
             }
         )
     base["board"] = board
     return base
+
+
+def _probabilities(prediction: dict | None) -> dict[str, float]:
+    """Return finite 1X2 probabilities from a prediction row."""
+    if prediction is None:
+        return {}
+    out = {}
+    for key, outcome in (("p_home", "home"), ("p_draw", "draw"), ("p_away", "away")):
+        value = prediction.get(key)
+        if isinstance(value, int | float):
+            out[outcome] = float(value)
+    return out
+
+
+def _chosen_stake_pct(response_text: str | None) -> float | None:
+    """Read the model's requested stake_pct from the stored raw bet JSON."""
+    if not response_text:
+        return None
+    try:
+        data = extract_json(response_text)
+    except LLMError:
+        return None
+    try:
+        return float(data.get("stake_pct"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _market_implied(odds: dict | None) -> dict[str, float] | None:
+    """Raw decimal-odds implied probabilities, not vig-normalized."""
+    if odds is None:
+        return None
+    try:
+        return {
+            "home": 1.0 / float(odds["home"]),
+            "draw": 1.0 / float(odds["draw"]),
+            "away": 1.0 / float(odds["away"]),
+        }
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _decision_receipt(
+    fixture: Fixture,
+    prediction: dict | None,
+    bet: dict | None,
+    odds: dict | None,
+    bet_response_text: str | None,
+) -> dict | None:
+    """Explain the mechanical inputs behind one agent's bet decision.
+
+    This is deliberately derived from persisted rows rather than model memory: it tells the
+    public what the engine actually showed/enforced for this fixture.
+    """
+    if prediction is None:
+        return None
+    probs = _probabilities(prediction)
+    eligible: list[str] = []
+    if probs:
+        top = max(probs.values())
+        eligible = [
+            outcome
+            for outcome, probability in probs.items()
+            if top - probability <= BET_ELIGIBILITY_WINDOW + 1e-12
+        ]
+
+    chosen_pct = _chosen_stake_pct(bet_response_text)
+    target = stage_matchday_target_fraction(fixture.stage.value)
+    shortfall_penalty = target * MATCHDAY_SHORTFALL_PENALTY_FRACTION
+    pick = bet.get("pick") if bet else None
+    stake = float(bet.get("stake") or 0.0) if bet else 0.0
+    engine_adjustment = bet.get("engine_adjustment") if bet else None
+
+    drivers: list[str] = []
+    if eligible:
+        if len(eligible) == 1:
+            drivers.append(f"Only {eligible[0]} was eligible from the blind forecast.")
+        else:
+            drivers.append(
+                "Eligible from blind forecast: " + ", ".join(eligible) + "."
+            )
+    if pick and pick in probs:
+        implied = (_market_implied(odds) or {}).get(pick)
+        if implied is not None:
+            if probs[pick] + 1e-12 < implied:
+                drivers.append(
+                    "The market price was tighter than the agent's own probability."
+                )
+            elif probs[pick] > implied + 1e-12:
+                drivers.append(
+                    "The agent's own probability was above the market-implied price."
+                )
+            else:
+                drivers.append("The agent's probability roughly matched the market price.")
+    if chosen_pct is not None:
+        if chosen_pct == 0:
+            drivers.append("The model chose to pass.")
+        elif abs((chosen_pct / 100.0) - target) <= 0.001:
+            drivers.append("The chosen tier matched the matchday allocation target.")
+        elif chosen_pct <= min(stage_stake_tiers(fixture.stage.value)) * 100 + 1e-9:
+            drivers.append("The model used the minimum real stake tier.")
+    if engine_adjustment:
+        drivers.append(f"The engine adjusted the request: {engine_adjustment}.")
+    elif bet is not None:
+        drivers.append("The engine accepted the request unchanged.")
+
+    return {
+        "probabilities": probs,
+        "market_implied": _market_implied(odds),
+        "eligible": eligible,
+        "available_tiers": [tier * 100 for tier in stage_stake_tiers(fixture.stage.value)],
+        "chosen_stake_pct": chosen_pct,
+        "matchday_target_pct": target * 100,
+        "shortfall_penalty_pct": shortfall_penalty * 100,
+        "outcome": "pass" if bet and not pick and stake <= 0 else pick,
+        "engine_adjustment": engine_adjustment,
+        "drivers": drivers,
+    }
 
 
 # ---- competitors ("characters") -----------------------------------------

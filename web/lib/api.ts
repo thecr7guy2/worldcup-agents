@@ -231,6 +231,18 @@ export interface BoardEntry {
     reasoning: string;
   } | null;
   settlement: { result: string; payout: number; pnl: number } | null;
+  decision_receipt: {
+    probabilities: Record<"home" | "draw" | "away", number>;
+    market_implied: Record<"home" | "draw" | "away", number> | null;
+    eligible: Array<"home" | "draw" | "away">;
+    available_tiers: number[];
+    chosen_stake_pct: number | null;
+    matchday_target_pct: number;
+    shortfall_penalty_pct: number;
+    outcome: "home" | "draw" | "away" | "pass" | null;
+    engine_adjustment: string | null;
+    drivers: string[];
+  } | null;
 }
 
 export interface FixtureDetail extends Fixture {

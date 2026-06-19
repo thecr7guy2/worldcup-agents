@@ -261,6 +261,9 @@ function BoardCard({ entry, home, away }: { entry: BoardEntry; home: TeamSide; a
               )}
             </Row>
           )}
+          {entry.decision_receipt && (
+            <DecisionReceipt receipt={entry.decision_receipt} home={home} away={away} />
+          )}
           {(p.reasoning || (b && b.reasoning)) && (
             <Rationale prediction={p.reasoning} bet={b?.reasoning} />
           )}
@@ -268,6 +271,106 @@ function BoardCard({ entry, home, away }: { entry: BoardEntry; home: TeamSide; a
       )}
     </div>
   );
+}
+
+function DecisionReceipt({
+  receipt,
+  home,
+  away,
+}: {
+  receipt: NonNullable<BoardEntry["decision_receipt"]>;
+  home: TeamSide;
+  away: TeamSide;
+}) {
+  const chosen =
+    receipt.chosen_stake_pct == null
+      ? receipt.outcome === "pass"
+        ? "pass"
+        : "pending"
+      : receipt.chosen_stake_pct === 0
+        ? "pass"
+        : `${receipt.chosen_stake_pct.toFixed(0)}%`;
+  const eligible = receipt.eligible.length
+    ? receipt.eligible.map((o) => shortOutcome(o, home, away)).join(", ")
+    : "none";
+
+  return (
+    <div className="mt-3 border border-line bg-bg p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="mono text-[9px] uppercase tracking-[0.14em] text-faint">Decision receipt</div>
+          <div className="mt-1 font-display text-base font-extrabold uppercase leading-none text-ink">
+            {receipt.outcome === "pass"
+              ? "Passed"
+              : receipt.outcome
+                ? `${chosen} on ${shortOutcome(receipt.outcome, home, away)}`
+                : "Awaiting bet"}
+          </div>
+        </div>
+        <div className="mono text-right text-[10px] uppercase tracking-[0.12em] text-faint">
+          target {receipt.matchday_target_pct.toFixed(0)}% / penalty {receipt.shortfall_penalty_pct.toFixed(1)}%
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-px bg-line text-xs sm:grid-cols-3">
+        <ReceiptMetric
+          label="Blind forecast"
+          value={`${home.code ?? "H"} ${pct(receipt.probabilities.home, 0)} / D ${pct(receipt.probabilities.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.probabilities.away, 0)}`}
+        />
+        <ReceiptMetric
+          label="Market implied"
+          value={
+            receipt.market_implied
+              ? `${home.code ?? "H"} ${pct(receipt.market_implied.home, 0)} / D ${pct(receipt.market_implied.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.market_implied.away, 0)}`
+              : "no odds"
+          }
+        />
+        <ReceiptMetric label="Allowed bets" value={eligible} />
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {receipt.available_tiers.map((tier) => (
+          <span
+            key={tier}
+            className={`mono border px-2 py-1 text-[10px] font-bold uppercase ${
+              receipt.chosen_stake_pct === tier
+                ? "border-ink bg-ink text-surface"
+                : "border-line bg-surface text-muted"
+            }`}
+          >
+            {tier.toFixed(0)}%
+          </span>
+        ))}
+      </div>
+
+      {receipt.drivers.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {receipt.drivers.slice(0, 3).map((driver) => (
+            <li key={driver} className="flex gap-2 text-[12px] leading-snug text-muted">
+              <span className="mt-[0.35rem] h-1.5 w-1.5 shrink-0 bg-volt" />
+              <span>{driver}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ReceiptMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-surface p-2.5">
+      <div className="mono text-[8px] uppercase tracking-[0.12em] text-faint">{label}</div>
+      <div className="mt-1 text-[12px] font-semibold leading-snug text-ink">{value}</div>
+    </div>
+  );
+}
+
+function shortOutcome(outcome: string, home: TeamSide, away: TeamSide) {
+  if (outcome === "home") return home.code ?? home.name;
+  if (outcome === "away") return away.code ?? away.name;
+  if (outcome === "draw") return "Draw";
+  return "Pass";
 }
 
 // Expandable "why this call" disclosure. Native <details> so it works with no
