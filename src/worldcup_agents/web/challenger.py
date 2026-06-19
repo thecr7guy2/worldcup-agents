@@ -15,9 +15,10 @@ This is the ONLY mutating part of the web tier. It is deliberately narrow:
 - Access is gated by a passphrase (`settings.challenger_key`); an empty key disables the
   whole feature (every route 404s, so its existence stays secret).
 
-The settlement engine, idle decay, bankroll ledger, and accuracy grading need no changes:
-they treat the challenger as just another `model_name` (see db.list_competitors /
-settlement / leaderboard). Only his *visibility* is suppressed (config.CHALLENGER_PUBLIC).
+Settlement, the bankroll ledger, and accuracy grading treat the challenger as just another
+`model_name`, but the newer AI-only matchday portfolio target is not applied to him until
+the challenger UI exposes that rule. Only his *visibility* is suppressed
+(config.CHALLENGER_PUBLIC).
 """
 
 from __future__ import annotations

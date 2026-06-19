@@ -115,6 +115,22 @@ export interface Competitor {
   accuracy: Accuracy;
   telemetry: { calls: number; tokens: number; cost_usd: number };
   archetype: string;
+  constitution: {
+    created_at: string;
+    principles: string[];
+    aggression: "low" | "medium" | "high";
+    favorite_tolerance: "low" | "medium" | "high";
+    draw_appetite: "low" | "medium" | "high";
+    contrarian_tendency: "low" | "medium" | "high";
+    bankroll_discipline: "low" | "medium" | "high";
+    constitution: string;
+  } | null;
+  behavior_profile: { label: string; value: string }[];
+  style_followthrough: {
+    score: number | null;
+    label: string;
+    notes: string[];
+  } | null;
 }
 
 export interface BankrollPoint {

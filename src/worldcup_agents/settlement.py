@@ -31,7 +31,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from . import db
-from .config import BANKRUPT_FLOOR, IDLE_DECAY, MAX_LIVES, REBUY_AMOUNT
+from .config import (
+    BANKRUPT_FLOOR,
+    IDLE_DECAY,
+    MATCHDAY_SHORTFALL_PENALTY_FRACTION,
+    MAX_LIVES,
+    REBUY_AMOUNT,
+    stage_matchday_target_fraction,
+)
 from .models import (
     BankrollEntry,
     Bet,
@@ -272,17 +279,18 @@ def record_result(
     return fixture
 
 
-# ---- Idle-cash decay (anti-cowardice, DESIGN §5) -------------------------
+# ---- Matchday portfolio decay (anti-cowardice, DESIGN §5) ----------------
 
 
 def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEntry]:
-    """Bleed `IDLE_DECAY` off each active competitor's UN-staked bankroll for one
-    matchday (UTC date, YYYY-MM-DD). Idempotent (skips an already-decayed matchday) and
-    atomic. Runs at matchday CLOSE — raises if any fixture that day is still unplayed,
-    since decaying before bets are placed would lock in an overstated idle base.
+    """Apply matchday-close anti-cowardice penalties.
 
-    A pure passer bleeds the full rate; a competitor who risked capital bleeds only on
-    the remainder. Decay is a bleed, not a loss: it never triggers bust/elimination.
+    AI competitors now play a portfolio game: each UTC matchday has a stage-ramped target
+    allocation, and any shortfall loses a fraction at close. The old idle-cash decay remains
+    as a tiny floor. The secret Human Challenger keeps the original simple idle rule because
+    its UI does not yet expose the AI portfolio target.
+
+    Decay/shortfall penalties never trigger bust/elimination.
     """
     if db.matchday_decayed(conn, matchday):
         return []
@@ -302,17 +310,35 @@ def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEn
         )
 
     staked = db.staked_by_model_on(conn, matchday)
+    target_fraction = max(
+        stage_matchday_target_fraction(f.stage.value) for f in fixtures
+    )
+    pnl_today = db.pnl_by_model_on(conn, matchday)
+    human_names = db.human_names(conn)
     at = _now()
     updated: list[Competitor] = []
     ledger: list[BankrollEntry] = []
-    # include_human=True: the secret Human Challenger plays by the SAME idle-decay rule as
-    # the AIs — list_competitors hides him from public boards by default, but here he must
-    # bleed un-staked cash like everyone else.
+    # include_human=True: the hidden challenger still gets the original idle-cash rule,
+    # while AI competitors also face the matchday portfolio shortfall penalty.
     for comp in db.list_competitors(conn, include_human=True):
         if not comp.active:
             continue  # eliminated competitors are frozen
-        idle = max(0.0, comp.bankroll - staked.get(comp.model_name, 0.0))
-        delta = round(-IDLE_DECAY * idle, 2)
+        stake = staked.get(comp.model_name, 0.0)
+        idle = max(0.0, comp.bankroll - stake)
+        idle_delta = -IDLE_DECAY * idle
+        delta = idle_delta
+        reason = "idle_decay"
+        if comp.model_name not in human_names:
+            pre_matchday_bankroll = max(
+                0.0, comp.bankroll - pnl_today.get(comp.model_name, 0.0)
+            )
+            target = pre_matchday_bankroll * target_fraction
+            shortfall = max(0.0, target - stake)
+            shortfall_delta = -MATCHDAY_SHORTFALL_PENALTY_FRACTION * shortfall
+            if abs(shortfall_delta) > abs(idle_delta):
+                delta = shortfall_delta
+                reason = "portfolio_decay"
+        delta = round(delta, 2)
         if delta == 0:
             continue
         balance = comp.bankroll + delta
@@ -330,7 +356,7 @@ def apply_idle_decay(conn: sqlite3.Connection, matchday: str) -> list[BankrollEn
                 at=at,
                 delta=delta,
                 balance_after=balance,
-                reason="idle_decay",
+                reason=reason,
                 fixture_id=None,
             )
         )
@@ -423,19 +449,26 @@ def _cmd_settle_day(args: argparse.Namespace) -> None:
 
 
 def _cmd_decay(args: argparse.Namespace) -> None:
-    """Apply and display idle-cash decay for one closed matchday."""
+    """Apply and display matchday portfolio/idle decay for one closed matchday."""
     conn = db.connect()
     db.init_db(conn)
     if db.matchday_decayed(conn, args.matchday):
         print(f"Matchday {args.matchday} already decayed — nothing to do.")
         return
     ledger = apply_idle_decay(conn, args.matchday)
-    print(f"Idle decay for {args.matchday} (rate {IDLE_DECAY:.3%}):\n")
-    print(f"{'model':<18}{'bleed':>14}{'bankroll':>16}")
+    print(
+        f"Matchday decay for {args.matchday} "
+        f"(idle floor {IDLE_DECAY:.3%}, portfolio shortfall penalty "
+        f"{MATCHDAY_SHORTFALL_PENALTY_FRACTION:.0%}):\n"
+    )
+    print(f"{'model':<18}{'reason':<18}{'bleed':>14}{'bankroll':>16}")
     for e in sorted(ledger, key=lambda x: x.model_name):
-        print(f"{e.model_name:<18}{e.delta:>+14,.2f}{e.balance_after:>16,.0f}")
+        print(
+            f"{e.model_name:<18}{e.reason:<18}{e.delta:>+14,.2f}"
+            f"{e.balance_after:>16,.0f}"
+        )
     if not ledger:
-        print("(no active competitors with idle cash)")
+        print("(no active competitors with decay)")
 
 
 def main() -> None:
@@ -466,7 +499,9 @@ def main() -> None:
     sd.add_argument("matchday", help="UTC date, YYYY-MM-DD")
     sd.set_defaults(func=_cmd_settle_day)
 
-    d = sub.add_parser("decay", help="apply idle-cash decay for a closed matchday")
+    d = sub.add_parser(
+        "decay", help="apply portfolio/idle decay for a closed matchday"
+    )
     d.add_argument("matchday", help="UTC date, YYYY-MM-DD")
     d.set_defaults(func=_cmd_decay)
 

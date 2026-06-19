@@ -29,15 +29,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import db
+from . import db, memory
 from .config import (
     BET_ELIGIBILITY_WINDOW,
     BET_STAKE_TIERS,
+    MATCHDAY_SHORTFALL_PENALTY_FRACTION,
     MAX_AGGREGATE_EXPOSURE,
     PREDICT_MAX_WORKERS,
     PREDICTION_MODELS,
     ModelSpec,
     stage_cap_fraction,
+    stage_matchday_target_fraction,
     stage_stake_tiers,
 )
 from .experiment import (
@@ -134,17 +136,22 @@ choose among outcomes you already found plausible and to judge whether a price i
 fair, or mean — never to talk you onto a longshot you did not believe in. A big payout is not a \
 reason to bet; it is the compensation for a risk you must independently judge worth taking.
 - In a clear mismatch, a short favourite price is not by itself a reason to pass. If your \
-football case is strong but the price is merely fair or a little mean, use the smallest tier \
-rather than sitting out. Pass only when the market badly overstates the side, the matchup \
+football case is strong but the price is merely fair or a little mean, use the minimum real \
+tier rather than sitting out. Pass only when the market badly overstates the side, the matchup \
 contains a concrete football trap, or your own forecast is genuinely thin.
 - In a close match, let the price tip you — a co-favourite at a generous number can be the \
 smarter bet than the marginal favourite at a short one.
 - Passing is allowed, but it should be an active football call, not the default. Never invent \
 an angle to force a bet, and never back a side merely because its odds are long.
 - Size with conviction. You bet in fixed tiers — the bet prompt lists the ones open this round. \
-Choose the tier that matches how strongly the football case AND the price line up: use the \
-smallest tier for a good football read at a tight price, push a larger tier when both are \
-clearly in your favour, and pass only when the bet does not deserve even the smallest tier.
+There are no token wagers: the minimum non-pass tier is real money. Choose the tier that \
+matches how strongly the football case AND the price line up: use the minimum tier only for a \
+modest but worthwhile football read at a tight price, push a larger tier when both are clearly \
+in your favour, and pass only when the bet does not deserve meaningful bankroll risk.
+- Manage the matchday as a portfolio. Each UTC matchday has a target amount of bankroll you \
+are expected to allocate across the slate; unallocated target budget is penalized at close. \
+You still should not force a bad bet, but if a line is playable, the portfolio target is a \
+reason to use a real tier instead of hiding in cash.
 - Talk like a pundit, not a quant. Justify every bet from the match itself — form, key \
 matchups, tactics, team news, motivation, conditions — then put the price judgment in plain \
 words. No talk of expected value, Kelly, edges, or bare percentages.
@@ -235,6 +242,7 @@ def predict(
     late_block = (
         f"\n\n## Late update (near kickoff)\n{late_update}" if late_update else ""
     )
+    shared_memory = memory.shared_tournament_memory(conn, fixture)
 
     is_knockout = fixture.stage != Stage.GROUP
     advance_field = '"advances": "home" | "away", ' if is_knockout else ""
@@ -256,6 +264,8 @@ shared, factual briefing. It contains NO betting odds by design — judge on foo
 merit alone.
 
 --- BRIEFING ---
+{shared_memory}
+
 {briefing.content}{late_block}
 --- END BRIEFING ---
 
@@ -467,6 +477,34 @@ def _exposure_note(bankroll: float, open_stake: float, open_count: int) -> str:
     )
 
 
+def _matchday_portfolio_note(
+    conn: sqlite3.Connection, fixture: Fixture, model_name: str, bankroll: float
+) -> str:
+    """Explain the slate-level allocation target that will be enforced at day close."""
+    matchday = fixture.kickoff.date().isoformat()
+    target_fraction = stage_matchday_target_fraction(fixture.stage.value)
+    staked_today = db.staked_by_model_on(conn, matchday).get(model_name, 0.0)
+    target = bankroll * target_fraction
+    remaining = max(0.0, target - staked_today)
+    if remaining <= 0:
+        return (
+            f"\nMATCHDAY PORTFOLIO: your {matchday} target allocation is "
+            f"{target_fraction:.0%} of bankroll (${target:,.0f}), and you have already "
+            f"allocated about ${staked_today:,.0f}. You have met the target; bet this "
+            f"fixture only if the football case still deserves additional risk."
+        )
+    penalty = remaining * MATCHDAY_SHORTFALL_PENALTY_FRACTION
+    return (
+        f"\nMATCHDAY PORTFOLIO: your {matchday} target allocation is "
+        f"{target_fraction:.0%} of bankroll (${target:,.0f}) across today's fixtures. "
+        f"You have already allocated about ${staked_today:,.0f}, leaving about "
+        f"${remaining:,.0f} before the target is met. Any unallocated target budget at "
+        f"matchday close loses {MATCHDAY_SHORTFALL_PENALTY_FRACTION:.0%} "
+        f"(${penalty:,.0f} if you make no further bets). Passing is allowed, but only "
+        f"when this line is worse than paying that shortfall cost."
+    )
+
+
 def bet(
     conn: sqlite3.Connection,
     model: ModelSpec,
@@ -495,6 +533,7 @@ def bet(
     # could each read the same exposure and jointly exceed it.
     open_stake, open_count = db.open_exposure(conn, model.name)
     exposure_note = _exposure_note(bankroll, open_stake, open_count)
+    portfolio_note = _matchday_portfolio_note(conn, fixture, model.name, bankroll)
 
     if prediction.has_distribution:
         forecast_line = (
@@ -516,8 +555,13 @@ def bet(
         for outcome, probability in eligible.items()
     )
     tier_line = ", ".join(f"{tier:.0%}" for tier in available_tiers)
+    bet_memory = memory.betting_memory_block(conn, model.name, fixture)
 
     prompt = f"""MATCH: {home} (home) vs {away} (away) — 90-minute result.
+
+--- MEMORY ---
+{bet_memory}
+--- END MEMORY ---
 
 YOUR earlier forecast (odds were hidden then):
 {forecast_line}
@@ -532,14 +576,14 @@ Your blind forecast is the football guardrail. An outcome is eligible only when 
 probability is within {BET_ELIGIBILITY_WINDOW:.0%} of your top read. For this match, the ONLY \
 eligible outcomes are: {eligible_line}. You may use the prices to choose among those outcomes, \
 or PASS. Any other pick will be rejected. If your Step-1 top outcome is clearly ahead, default \
-to at least the smallest tier unless you can name a concrete football or market reason it is \
-not worth even that. Do not invent a case just to wager, and do not choose a longshot solely \
-because its payout is large.
+to at least the minimum tier unless you can name a concrete football or market reason it is \
+not worth meaningful bankroll risk. Do not invent a case just to wager, and do not choose a \
+longshot solely because its payout is large.
 
 Choose one fixed conviction tier for this {fixture.stage.value} match: {tier_line}. The stage \
 ceiling is {cap_fraction:.0%} of bankroll. A tier is a percentage of your current \
 ${bankroll:,.0f} bankroll; the engine may trim it only when your aggregate live exposure is \
-already near 50%.{exposure_note}
+already near 50%.{exposure_note}{portfolio_note}
 
 Respond with ONLY a JSON object, no other text:
 {{"pick": "home" | "draw" | "away" | "pass", \

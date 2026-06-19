@@ -79,16 +79,29 @@ large wager on an outcome the same model rated clearly unlikely (`53/26/21`).
 
 Stake sizing uses fixed conviction tiers instead of Kelly or an EV formula:
 
-- Group: 2%, 5%, 10%, 15%, 20%.
+- Group: 5%, 10%, 15%, 20%.
 - Round of 32 / Round of 16: add 25%.
 - Quarterfinal onward: add 30%.
 
 The engine validates the tier, applies the stage ceiling, and trims only for the existing
 50% aggregate-exposure budget. There is no revised probability, EV gate, market blend,
-Kelly sizing, or minimum stake floor. Passing is explicitly normal when no eligible price
-deserves money; the prompt no longer pressures agents to bet every real lean. A malformed
+Kelly sizing, or token 2% stake. Passing is explicitly normal when no eligible price deserves
+money; the prompt no longer pressures agents to bet every real lean. A malformed
 Step-2 JSON response gets one format-only retry; parsed semantic violations are enforced
 without asking the model to reconsider its decision.
+
+**Matchday portfolio pressure (Phase 6.1).** Bets still lock fixture-by-fixture near kickoff
+so late team news can be included, but the bankroll game is judged by UTC matchday slate:
+
+- Group stage target: allocate 15% of bankroll across the matchday.
+- Round of 32 / Round of 16 target: allocate 20%.
+- Quarterfinal onward target: allocate 25%.
+- Any unallocated target budget loses 25% at matchday close.
+
+This preserves tactical passing on bad lines while making pure caution expensive. Example:
+with a $1,000,000 bankroll in the group stage, the target is $150,000. If an agent stakes
+only $50,000 across that day, the $100,000 shortfall costs $25,000 at close. If it meets or
+exceeds the target, only the tiny idle-cash floor can apply.
 
 Conviction from step 1 is the bridge into step 2 — the stake reflects *how sure* it was.
 Hiding odds until step 2 means an agent disagreeing with the bookies does so on football
@@ -209,16 +222,18 @@ market prices determine which plausible outcome is worth backing.
 - That's the only prediction and the only bet. No scorer, no exact score in v1.
   (Dropped to keep it simple; 1X2 odds are trivially available from any odds API.)
 
-### Passing & idle decay (anti-cowardice)
+### Passing & matchday portfolio decay (anti-cowardice)
 - **Passing is allowed and legitimate** — betting only where there's value is a core gambler
   skill; forcing a bet every match would punish exactly the discipline we want to reward.
 - **Why a passer is a real benchmark:** betting into bookmaker odds is slightly -EV (the vig),
   so an agent that passes everything and holds $1M is the "no edge, no risk" null hypothesis.
   Beating it requires genuine predictive edge over the market — which is the skill we measure.
 - **The exploit it creates:** if all models are mediocre, a pure-passer wins by doing nothing.
-- **Guardrail — idle-cash decay:** un-staked bankroll bleeds a small % each matchday (~0.25–
-  0.5%, TUNABLE). Skipping one match is negligible; passing 100+ matches guarantees you slide
-  below $1M. Tactical passing stays viable; winning-by-cowardice does not. A0 — tune the rate.
+- **Guardrail — matchday allocation target:** each AI must allocate a stage-ramped portfolio
+  target across the day's fixtures or pay a shortfall penalty at close. Skipping one bad line
+  stays viable; skipping the whole slate is no longer free. The older idle-cash decay remains
+  as a tiny floor, and the Human Challenger keeps that simple rule until the UI exposes the
+  AI portfolio target.
 
 ### Bust rule — cap + re-buy
 - **Per-match stake cap:** fixed tiers with a stage ceiling: 20% in groups, 25% in the

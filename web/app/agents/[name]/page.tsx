@@ -8,6 +8,7 @@ import {
   Lightning,
   Warning,
   Confetti,
+  Scroll,
 } from "@phosphor-icons/react/dist/ssr";
 import { getCompetitor, getCompetitors } from "@/lib/api";
 import {
@@ -42,6 +43,7 @@ export default async function AgentPage({
   const rank = board.findIndex((c) => c.model === card!.model) + 1;
   const c = card!;
   const kit = c.meta.color;
+  const visiblePrinciples = c.constitution?.principles.slice(0, 4) ?? [];
 
   return (
     <div className="flex flex-col gap-10">
@@ -127,24 +129,63 @@ export default async function AgentPage({
         </div>
       </Card>
 
-      <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="border-2 border-ink bg-surface p-5 shadow-[6px_6px_0_rgba(22,29,24,.12)]">
-          <div className="mono text-[9px] uppercase tracking-[0.18em] text-faint">Scouting report / fictional</div>
-          <div className="mt-5 grid gap-px bg-line">
-            <DossierRow icon={Lightning} label="Play style" value={c.meta.play_style} />
-            <DossierRow icon={Coins} label="Signature move" value={c.meta.signature_move} />
-            <DossierRow icon={Warning} label="Known weakness" value={c.meta.weakness} />
-            <DossierRow icon={Confetti} label="Upset celebration" value={c.meta.celebration} />
+      <section className="grid items-start gap-6 lg:grid-cols-[1fr_0.86fr]">
+        <div className="border-2 border-ink bg-surface shadow-[6px_6px_0_rgba(22,29,24,.12)]">
+          <div className="border-b border-line p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="mono text-[9px] uppercase tracking-[0.18em] text-faint">Betting constitution</div>
+              <h2 className="mt-1 font-display text-2xl font-extrabold uppercase tracking-[-0.04em] text-ink">
+                Self-written rules
+              </h2>
+            </div>
+            <Scroll size={24} weight="bold" className="text-volt" />
           </div>
-          <blockquote className="mt-5 border-l-4 pl-4 font-display text-xl font-bold italic leading-tight text-ink" style={{ borderColor: kit }}>
-            “{c.meta.quote}”
-          </blockquote>
-          <p className="mono mt-5 text-[9px] uppercase tracking-[0.13em] text-faint">
-            Visual brief: {c.meta.visual_motif}
-          </p>
+          {c.constitution ? (
+            <>
+              <p className="mt-4 border-l-4 pl-4 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]" style={{ borderColor: kit }}>
+                {c.constitution.constitution}
+              </p>
+            </>
+          ) : (
+            <Empty icon={Scroll} title="Constitution pending">
+              This agent has not written its public betting constitution yet.
+            </Empty>
+          )}
+          </div>
+          {c.constitution && (
+            <>
+              <div className="grid gap-px bg-line sm:grid-cols-4">
+                {c.behavior_profile.map((m) => (
+                  <BehaviorCell key={m.label} label={m.label} value={m.value} />
+                ))}
+              </div>
+              <div className="grid gap-px border-t border-line bg-line sm:grid-cols-2">
+                {visiblePrinciples.map((p, i) => (
+                  <div key={p} className="bg-surface p-4">
+                    <div className="mono text-[9px] uppercase tracking-[0.16em] text-faint">
+                      Principle {i + 1}
+                    </div>
+                    <p className="mt-2 text-sm font-semibold leading-snug text-ink [overflow-wrap:anywhere]">{p}</p>
+                  </div>
+                ))}
+              </div>
+              {c.style_followthrough && (
+                <div className="flex flex-col gap-2 border-t border-line bg-bg p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="mono text-[9px] uppercase tracking-[0.16em] text-faint">Style follow-through</div>
+                    <div className="mt-1 font-display text-xl font-extrabold uppercase text-ink">
+                      {c.style_followthrough.label}
+                    </div>
+                  </div>
+                  <p className="max-w-[44ch] text-xs leading-relaxed text-muted">{c.style_followthrough.notes[0]}</p>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        <div className="border-2 border-ink bg-ink p-5 text-surface shadow-[6px_6px_0_var(--color-volt)]">
+        <div className="self-start border-2 border-ink bg-ink p-5 text-surface shadow-[6px_6px_0_var(--color-volt)]">
           <div className="flex items-end justify-between gap-4 border-b border-white/15 pb-4">
             <div>
               <div className="mono text-[9px] uppercase tracking-[0.18em] text-white/45">Video-game attributes</div>
@@ -158,6 +199,19 @@ export default async function AgentPage({
             <PersonaRatings ratings={c.meta.ratings} color={kit} />
           </div>
         </div>
+      </section>
+
+      <section className="border-2 border-ink bg-surface p-5 shadow-[6px_6px_0_rgba(22,29,24,.12)]">
+        <div className="mono text-[9px] uppercase tracking-[0.18em] text-faint">Scouting report / fictional</div>
+        <div className="mt-5 grid gap-px bg-line md:grid-cols-2">
+          <DossierRow icon={Lightning} label="Play style" value={c.meta.play_style} />
+          <DossierRow icon={Coins} label="Signature move" value={c.meta.signature_move} />
+          <DossierRow icon={Warning} label="Known weakness" value={c.meta.weakness} />
+          <DossierRow icon={Confetti} label="Celebration" value={c.meta.celebration} />
+        </div>
+        <blockquote className="mt-5 border-l-4 pl-4 font-display text-xl font-bold italic leading-tight text-ink" style={{ borderColor: kit }}>
+          “{c.meta.quote}”
+        </blockquote>
       </section>
 
       <section className="grid grid-cols-2 gap-px overflow-hidden border-2 border-ink bg-line sm:grid-cols-3 lg:grid-cols-6">
@@ -269,6 +323,15 @@ function DossierRow({
       <Icon size={18} weight="bold" className="text-volt" />
       <span className="mono text-[9px] uppercase tracking-[0.12em] text-faint">{label}</span>
       <span className="text-sm font-semibold text-ink">{value}</span>
+    </div>
+  );
+}
+
+function BehaviorCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-surface p-3">
+      <div className="mono text-[9px] uppercase tracking-[0.14em] text-faint">{label}</div>
+      <div className="mt-1 font-display text-lg font-extrabold uppercase text-ink">{value}</div>
     </div>
   );
 }

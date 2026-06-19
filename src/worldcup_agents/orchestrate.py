@@ -11,7 +11,7 @@ reach match N+1's briefing and never its own.
       2. settle bets      resolved fixtures that still have unsettled bets
       3. post-match       finished fixtures -> per-team recap + dossier fold (once/team)
       4. resolve bracket  fill knockout team ids from finished results (gates briefing)
-      5. idle decay       matchdays fully closed and not yet decayed
+      5. matchday decay   fully closed matchdays not yet decayed
       6. brief            scheduled fixtures inside the pre-match window (no briefing yet)
       7. predict + bet    scheduled fixtures inside the bet window (briefing + odds present)
 
@@ -29,7 +29,7 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from . import bracket, db, ingest, intelligence, predict, results, settlement
+from . import bracket, db, ingest, intelligence, memory, predict, results, settlement
 from .config import (
     BET_LEAD_HOURS,
     BRIEF_LEAD_HOURS,
@@ -229,6 +229,7 @@ def _new_summary() -> dict:
         "postprocessed": 0,
         "resolved": 0,
         "decayed": 0,
+        "memory": 0,
         "briefed": 0,
         "late": 0,
         "odds_refreshed": 0,
@@ -282,11 +283,14 @@ def tick(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict:
     except Exception as e:  # noqa: BLE001
         s["errors"].append(f"bracket: {e}")
 
-    # 5. Idle decay for fully-closed matchdays.
+    # 5. Portfolio/idle decay for fully-closed matchdays.
     for day in due_matchdays(conn, fixtures):
         try:
             settlement.apply_idle_decay(conn, day)
             s["decayed"] += 1
+            for model in PREDICTION_MODELS:
+                memory.refresh_agent_memory(conn, model.name)
+            s["memory"] += 1
         except Exception as e:  # noqa: BLE001
             s["errors"].append(f"decay {day}: {e}")
 
@@ -360,7 +364,7 @@ def _cmd_tick(args: argparse.Namespace) -> None:
     print(
         f"tick — results:{s['results']} settled:{s['settled']} "
         f"postmatch:{s['postprocessed']} resolved:{s['resolved']} "
-        f"decay:{s['decayed']} briefed:{s['briefed']} late:{s['late']} "
+        f"decay:{s['decayed']} memory:{s['memory']} briefed:{s['briefed']} late:{s['late']} "
         f"odds:{s['odds_refreshed']} predicted:{s['predicted']}"
     )
     for err in s["errors"]:

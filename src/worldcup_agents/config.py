@@ -89,10 +89,10 @@ STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
 BET_ELIGIBILITY_WINDOW = 0.10
 
 # Fixed conviction tiers. The prompt offers only the tiers allowed by the current stage;
-# the engine validates them and converts the chosen percentage into dollars. The 2% tier
-# is the "I like my football read, but the price is short" option, added after early
-# phase-6 rows passed too often on correctly identified favourites.
-BET_STAKE_TIERS: tuple[float, ...] = (0.02, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30)
+# the engine validates them and converts the chosen percentage into dollars. The smallest
+# non-pass tier is intentionally 5%: lower "token" bets proved too easy for agents to hide
+# behind late in a finite tournament, producing activity without meaningful bankroll risk.
+BET_STAKE_TIERS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30)
 
 # Aggressive stage ceilings keep early variance bounded while preserving large wagers.
 # Group matches top out at 20%, the first two knockout rounds at 25%, and the quarterfinals
@@ -110,6 +110,22 @@ STAGE_MAX_STAKE_FRACTION: dict[str, float] = {
 # Most of a competitor's bankroll that may be live across ALL its unsettled matches at once.
 MAX_AGGREGATE_EXPOSURE = 0.50
 
+# Matchday portfolio pressure. Agents still lock each fixture near kickoff so late team
+# news can be included, but the day is judged as a slate: they are expected to put a
+# stage-dependent fraction of bankroll to work across that UTC matchday. Any shortfall pays
+# a penalty at matchday close, making cautious passing possible but no longer free.
+MATCHDAY_TARGET_STAKE_FRACTION = 0.15
+STAGE_MATCHDAY_TARGET_STAKE_FRACTION: dict[str, float] = {
+    "group": 0.15,
+    "round_of_32": 0.20,
+    "round_of_16": 0.20,
+    "quarter_final": 0.25,
+    "semi_final": 0.25,
+    "third_place": 0.25,
+    "final": 0.25,
+}
+MATCHDAY_SHORTFALL_PENALTY_FRACTION = 0.25
+
 # The secret human challenger keeps its original simple manual ruleset. It does not emit a
 # complete 1X2 distribution, so it cannot use the AI-only eligibility mechanic without a
 # separate UI/data-model overhaul.
@@ -125,6 +141,13 @@ def stage_stake_tiers(stage: str) -> tuple[float, ...]:
     """Fixed stake tiers available at this stage, ordered from smallest to largest."""
     cap = stage_cap_fraction(stage)
     return tuple(tier for tier in BET_STAKE_TIERS if tier <= cap + 1e-12)
+
+
+def stage_matchday_target_fraction(stage: str) -> float:
+    """Target stake fraction expected across one UTC matchday at this stage."""
+    return STAGE_MATCHDAY_TARGET_STAKE_FRACTION.get(
+        stage, MATCHDAY_TARGET_STAKE_FRACTION
+    )
 
 
 IDLE_DECAY = 0.005  # fraction lost on un-staked bankroll per matchday (anti-cowardice)

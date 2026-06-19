@@ -2,9 +2,9 @@
 
     uv run python scripts/verify_scoring.py
 
-Covers idle-cash decay (todo-scoring §3.1-§3.5) and the two leaderboards (§3.6-§3.7),
-including the DESIGN §7 carry-through: a predicted home win in a 1-1 match decided on
-penalties is graded WRONG (draw on the 90-minute score).
+Covers matchday portfolio/idle decay and the two leaderboards, including the DESIGN §7
+carry-through: a predicted home win in a 1-1 match decided on penalties is graded WRONG
+(draw on the 90-minute score).
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from pathlib import Path
 from worldcup_agents import db
 from worldcup_agents.config import (
     IDLE_DECAY,
+    MATCHDAY_SHORTFALL_PENALTY_FRACTION,
+    MATCHDAY_TARGET_STAKE_FRACTION,
     POINTS_CORRECT_ADVANCE,
     POINTS_CORRECT_OUTCOME,
     POINTS_CORRECT_SCORE,
@@ -109,16 +111,23 @@ def main() -> None:
     record_result(conn, 800, 2, 1)  # finish the fixture → matchday closed
     apply_idle_decay(conn, DAY)
 
-    # AC1 passer: full bleed on the whole bankroll.
+    # AC1 passer: portfolio shortfall penalty beats the tiny idle bleed.
     cp = db.get_competitor(conn, passer)
-    assert abs(cp.bankroll - STARTING_BANKROLL * (1 - IDLE_DECAY)) < 0.01, cp
+    passer_shortfall = STARTING_BANKROLL * MATCHDAY_TARGET_STAKE_FRACTION
+    expected_passer = STARTING_BANKROLL - (
+        passer_shortfall * MATCHDAY_SHORTFALL_PENALTY_FRACTION
+    )
+    assert abs(cp.bankroll - expected_passer) < 0.01, cp
     hist = db.list_bankroll_history(conn, passer)
     assert (
-        len(hist) == 1 and hist[0].reason == "idle_decay" and hist[0].fixture_id is None
+        len(hist) == 1
+        and hist[0].reason == "portfolio_decay"
+        and hist[0].fixture_id is None
     )
     assert cp.active is True and cp.lives_used == 0  # decay never busts
 
-    # AC2 bettor: bleed only on the un-staked remainder; edge (no idle) → no change.
+    # AC2 bettor met the matchday target, so only the tiny idle-cash floor applies;
+    # edge has no idle cash and no shortfall → no change.
     cb = db.get_competitor(conn, bettor)
     expected = STARTING_BANKROLL - IDLE_DECAY * (STARTING_BANKROLL - 200_000.0)
     assert abs(cb.bankroll - expected) < 0.01, cb
@@ -136,7 +145,7 @@ def main() -> None:
     assert apply_idle_decay(conn, DAY) == []
     assert {c.model_name: c.bankroll for c in db.list_competitors(conn)} == snap
     print(
-        "idle decay (passer / partial / no-idle / eliminated / idempotent / guard): PASS"
+        "portfolio decay (passer / target-met / no-idle / eliminated / idempotent / guard): PASS"
     )
 
     # --- LEADERBOARDS -----------------------------------------------------

@@ -225,6 +225,137 @@ def _archetype(
     return "Underdog"
 
 
+def _style_followthrough(
+    constitution: dict | None,
+    *,
+    bets_placed: int,
+    passes: int,
+    avg_stake_pct: float,
+    roi: float,
+) -> dict | None:
+    """Coarse public check: does observed betting match the stated constitution profile?"""
+    if constitution is None:
+        return None
+    total = bets_placed + passes
+    if total < 3:
+        return {
+            "score": None,
+            "label": "too early",
+            "notes": ["Needs at least three locked decisions before style can be judged."],
+        }
+    pass_rate = passes / total if total else 0.0
+    aggression = constitution["aggression"]
+    discipline = constitution["bankroll_discipline"]
+    notes: list[str] = []
+    score = 0
+
+    if aggression == "high":
+        ok = avg_stake_pct >= 0.09 or pass_rate <= 0.35
+        notes.append("High aggression expects fewer passes or larger average stakes.")
+    elif aggression == "low":
+        ok = avg_stake_pct <= 0.10 and pass_rate >= 0.25
+        notes.append("Low aggression expects selective betting and restrained stake size.")
+    else:
+        ok = 0.04 <= avg_stake_pct <= 0.16
+        notes.append("Medium aggression expects meaningful but not maximal average stakes.")
+    score += 1 if ok else 0
+
+    if discipline == "high":
+        ok = roi > -0.35 and avg_stake_pct <= 0.18
+        notes.append("High discipline expects bankroll damage control and capped average risk.")
+    elif discipline == "low":
+        ok = avg_stake_pct >= 0.08 or roi > 0
+        notes.append("Low discipline tolerates bolder risk if it creates upside.")
+    else:
+        ok = roi > -0.5
+        notes.append("Medium discipline expects losses not to spiral out of control.")
+    score += 1 if ok else 0
+
+    label = "following style" if score == 2 else "mixed signals" if score == 1 else "off-style"
+    return {"score": score / 2, "label": label, "notes": notes}
+
+
+def _behavior_profile(
+    bets: list,
+    ledger: list,
+    *,
+    bets_placed: int,
+    passes: int,
+    avg_stake_pct: float,
+    roi: float,
+    bankroll: float,
+) -> list[dict]:
+    """Behavior-derived style labels for the public agent page.
+
+    These intentionally replace self-declared low/medium/high labels, which clustered too
+    much because every model described itself as disciplined. This uses actual public rows.
+    """
+    total_decisions = bets_placed + passes
+    pass_rate = passes / total_decisions if total_decisions else 0.0
+    draw_or_underdog = sum(1 for b in bets if b["pick"] in {"draw", "away"} and (b["stake"] or 0) > 0)
+    non_fav_rate = draw_or_underdog / bets_placed if bets_placed else 0.0
+    portfolio_hits = sum(1 for e in ledger if e.reason == "portfolio_decay")
+    drawdown = max(0.0, (STARTING_BANKROLL - bankroll) / STARTING_BANKROLL)
+
+    if total_decisions < 3:
+        risk = "warming up"
+    elif pass_rate >= 0.55:
+        risk = "selective"
+    elif avg_stake_pct >= 0.10:
+        risk = "forceful"
+    else:
+        risk = "balanced"
+
+    if bets_placed < 3:
+        price = "unproven"
+    elif non_fav_rate >= 0.45:
+        price = "value hunter"
+    elif non_fav_rate <= 0.15:
+        price = "favorite-leaning"
+    else:
+        price = "selective prices"
+
+    if portfolio_hits >= 2:
+        slate = "target misses"
+    elif pass_rate <= 0.35 and total_decisions >= 3:
+        slate = "active allocator"
+    else:
+        slate = "patient allocator"
+
+    if drawdown >= 0.20:
+        bankroll_state = "under pressure"
+    elif roi >= 0.15:
+        bankroll_state = "profitable"
+    elif avg_stake_pct >= 0.15 and roi < 0:
+        bankroll_state = "swingy"
+    else:
+        bankroll_state = "controlled"
+
+    return [
+        {"label": "Risk mode", "value": risk},
+        {"label": "Price posture", "value": price},
+        {"label": "Slate pressure", "value": slate},
+        {"label": "Bankroll state", "value": bankroll_state},
+    ]
+
+
+def _constitution_payload(conn: sqlite3.Connection, model_name: str) -> dict | None:
+    """Serialize a public constitution row for the API."""
+    c = db.get_agent_constitution(conn, model_name)
+    if c is None:
+        return None
+    return {
+        "created_at": c.created_at.isoformat(),
+        "principles": c.principles,
+        "aggression": c.aggression,
+        "favorite_tolerance": c.favorite_tolerance,
+        "draw_appetite": c.draw_appetite,
+        "contrarian_tendency": c.contrarian_tendency,
+        "bankroll_discipline": c.bankroll_discipline,
+        "constitution": c.constitution,
+    }
+
+
 def competitor_card(
     conn: sqlite3.Connection,
     c: Competitor,
@@ -235,6 +366,7 @@ def competitor_card(
     bets = conn.execute(
         "SELECT pick, stake FROM bet WHERE model_name = ?", (c.model_name,)
     ).fetchall()
+    ledger = db.list_bankroll_history(conn, c.model_name)
     settled = [
         dict(r)
         for r in conn.execute(
@@ -261,6 +393,7 @@ def competitor_card(
     acc = accuracy_by_model.get(c.model_name, {})
     usage = usage_by_model.get(c.model_name, {})
     hit_rate = float(acc.get("hit_rate", 0.0) or 0.0)
+    constitution = _constitution_payload(conn, c.model_name)
 
     return {
         "model": c.model_name,
@@ -305,6 +438,23 @@ def competitor_card(
             passes=passes,
             avg_stake_pct=avg_stake_pct,
             hit_rate=hit_rate,
+            roi=roi,
+        ),
+        "constitution": constitution,
+        "behavior_profile": _behavior_profile(
+            bets,
+            ledger,
+            bets_placed=len(active_bets),
+            passes=passes,
+            avg_stake_pct=avg_stake_pct,
+            roi=roi,
+            bankroll=c.bankroll,
+        ),
+        "style_followthrough": _style_followthrough(
+            constitution,
+            bets_placed=len(active_bets),
+            passes=passes,
+            avg_stake_pct=avg_stake_pct,
             roi=roi,
         ),
     }

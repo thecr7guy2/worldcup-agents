@@ -259,6 +259,13 @@ def main() -> None:
     print("arbitrary percentage outside the fixed ladder is rejected: PASS")
 
     conn, fixture = _setup()
+    token_tier = _bet(conn, fixture, clear, "away", 2)
+    assert token_tier.is_pass
+    assert token_tier.requested_stake == 20_000
+    assert token_tier.engine_adjustment == "invalid_tier"
+    print("2% token stake is rejected; smallest real tier is 5%: PASS")
+
+    conn, fixture = _setup()
     recovery_stub, recovery_state = _completion_sequence(
         [
             "I choose Scotland at the top tier.",
@@ -327,7 +334,6 @@ def main() -> None:
     )
 
     assert stage_stake_tiers(Stage.GROUP.value) == (
-        0.02,
         0.05,
         0.10,
         0.15,

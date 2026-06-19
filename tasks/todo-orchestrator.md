@@ -19,7 +19,7 @@ tick(now):
   1. ingest results   matches past kickoff+RESULT_DELAY, still unresolved
   2. settle bets      resolved fixtures that still have unsettled bets
   3. post-match       finished fixtures -> per-team recap + dossier fold (once per team)
-  4. idle decay       matchdays fully closed and not yet decayed
+  4. matchday decay   matchdays fully closed and not yet decayed
   5. brief            scheduled fixtures inside the pre-match window (no briefing yet)
   6. predict + bet    scheduled fixtures inside the bet window (briefing + odds present)
 ```

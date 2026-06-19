@@ -17,6 +17,8 @@ from .config import PREDICTION_MODELS, STARTING_BANKROLL
 import os
 
 from .models import (
+    AgentConstitution,
+    AgentMemory,
     BankrollEntry,
     Bet,
     BetResult,
@@ -240,6 +242,24 @@ CREATE TABLE IF NOT EXISTS tournament_outlook (
     golden_boot   TEXT NOT NULL,
     worldview     TEXT NOT NULL,
     PRIMARY KEY (model_name, phase)
+);
+
+CREATE TABLE IF NOT EXISTS agent_constitution (
+    model_name            TEXT PRIMARY KEY,
+    created_at            TEXT NOT NULL,
+    principles            TEXT NOT NULL,  -- JSON list of self-written principles
+    aggression            TEXT NOT NULL,
+    favorite_tolerance    TEXT NOT NULL,
+    draw_appetite         TEXT NOT NULL,
+    contrarian_tendency   TEXT NOT NULL,
+    bankroll_discipline   TEXT NOT NULL,
+    constitution          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_memory (
+    model_name  TEXT PRIMARY KEY,
+    updated_at  TEXT NOT NULL,
+    content     TEXT NOT NULL
 );
 
 -- Public-site audience telemetry. One row per unique visitor (keyed by a first-party cookie,
@@ -543,9 +563,9 @@ def list_competitors(
     """Return competitors ordered by bankroll (leaderboard order).
 
     The secret Human Challenger (is_human=1) is EXCLUDED by default, so every existing
-    public-board caller keeps showing only the AI competition. The engine paths that must
-    treat him as a peer (idle decay) pass include_human=True; settlement reaches him via
-    `get_competitor` directly and so is unaffected by this filter.
+    public-board caller keeps showing only the AI competition. Engine paths that need his
+    bankroll row pass include_human=True; settlement reaches him via `get_competitor`
+    directly and so is unaffected by this filter.
     """
     where = "" if include_human else "WHERE is_human = 0"
     rows = conn.execute(
@@ -866,8 +886,19 @@ def staked_by_model_on(conn: sqlite3.Connection, matchday: str) -> dict[str, flo
     return {r["m"]: float(r["staked"]) for r in rows}
 
 
+def pnl_by_model_on(conn: sqlite3.Connection, matchday: str) -> dict[str, float]:
+    """Total settled PnL each model booked on a matchday's fixtures (UTC date)."""
+    rows = conn.execute(
+        "SELECT s.model_name AS m, COALESCE(SUM(s.pnl), 0) AS pnl "
+        "FROM settlement s JOIN fixture f ON s.fixture_id = f.id "
+        "WHERE date(f.kickoff) = ? GROUP BY s.model_name",
+        (matchday,),
+    ).fetchall()
+    return {r["m"]: float(r["pnl"]) for r in rows}
+
+
 def matchday_decayed(conn: sqlite3.Connection, matchday: str) -> bool:
-    """True if idle decay has already been applied (and marked) for this matchday."""
+    """True if matchday decay has already been applied (and marked)."""
     row = conn.execute(
         "SELECT 1 FROM matchday_decay WHERE matchday = ?", (matchday,)
     ).fetchone()
@@ -881,8 +912,8 @@ def record_idle_decay(
     competitors: list[Competitor],
     ledger: list[BankrollEntry],
 ) -> None:
-    """Atomically apply one matchday's idle decay: update each competitor's bankroll,
-    append `idle_decay` ledger entries, and write the matchday marker — one commit."""
+    """Atomically apply one matchday's decay: update bankrolls, append ledger entries,
+    and write the matchday marker — one commit."""
     cur = conn.cursor()
     for c in competitors:
         cur.execute(
@@ -1136,6 +1167,79 @@ def list_outlooks(
         params = (phase,)
     sql += " ORDER BY phase, model_name"
     return [_row_to_outlook(dict(r)) for r in conn.execute(sql, params)]
+
+
+# ---- Agent constitutions and private memory ------------------------------
+
+
+def upsert_agent_constitution(conn: sqlite3.Connection, c: AgentConstitution) -> None:
+    """Insert or replace one model's self-written betting constitution."""
+    conn.execute(
+        "INSERT OR REPLACE INTO agent_constitution "
+        "(model_name, created_at, principles, aggression, favorite_tolerance, "
+        " draw_appetite, contrarian_tendency, bankroll_discipline, constitution) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            c.model_name,
+            c.created_at.isoformat(),
+            json.dumps(c.principles),
+            c.aggression,
+            c.favorite_tolerance,
+            c.draw_appetite,
+            c.contrarian_tendency,
+            c.bankroll_discipline,
+            c.constitution,
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_constitution(d: dict) -> AgentConstitution:
+    """Deserialize JSON list fields and build an agent constitution model."""
+    d["principles"] = json.loads(d["principles"])
+    return AgentConstitution(**d)
+
+
+def get_agent_constitution(
+    conn: sqlite3.Connection, model_name: str
+) -> AgentConstitution | None:
+    """Fetch one model's constitution, or None if it has not been asked yet."""
+    row = conn.execute(
+        "SELECT model_name, created_at, principles, aggression, favorite_tolerance, "
+        "draw_appetite, contrarian_tendency, bankroll_discipline, constitution "
+        "FROM agent_constitution WHERE model_name = ?",
+        (model_name,),
+    ).fetchone()
+    return _row_to_constitution(dict(row)) if row else None
+
+
+def list_agent_constitutions(conn: sqlite3.Connection) -> list[AgentConstitution]:
+    """Return all saved constitutions ordered by model name."""
+    rows = conn.execute(
+        "SELECT model_name, created_at, principles, aggression, favorite_tolerance, "
+        "draw_appetite, contrarian_tendency, bankroll_discipline, constitution "
+        "FROM agent_constitution ORDER BY model_name"
+    ).fetchall()
+    return [_row_to_constitution(dict(r)) for r in rows]
+
+
+def upsert_agent_memory(conn: sqlite3.Connection, m: AgentMemory) -> None:
+    """Insert or replace one model's private self-memory."""
+    conn.execute(
+        "INSERT OR REPLACE INTO agent_memory (model_name, updated_at, content) "
+        "VALUES (?, ?, ?)",
+        (m.model_name, m.updated_at.isoformat(), m.content),
+    )
+    conn.commit()
+
+
+def get_agent_memory(conn: sqlite3.Connection, model_name: str) -> AgentMemory | None:
+    """Fetch one model's private self-memory, or None."""
+    row = conn.execute(
+        "SELECT model_name, updated_at, content FROM agent_memory WHERE model_name = ?",
+        (model_name,),
+    ).fetchone()
+    return AgentMemory(**dict(row)) if row else None
 
 
 def usage_by_model(conn: sqlite3.Connection) -> list[dict]:
