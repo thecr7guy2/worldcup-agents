@@ -282,6 +282,8 @@ function DecisionReceipt({
   home: TeamSide;
   away: TeamSide;
 }) {
+  const minTier = Math.min(...receipt.available_tiers);
+  const stance = decisionStance(receipt, minTier);
   const chosen =
     receipt.chosen_stake_pct == null
       ? receipt.outcome === "pass"
@@ -293,68 +295,163 @@ function DecisionReceipt({
   const eligible = receipt.eligible.length
     ? receipt.eligible.map((o) => shortOutcome(o, home, away)).join(", ")
     : "none";
+  const pickedProbability =
+    receipt.outcome && receipt.outcome !== "pass" ? receipt.probabilities[receipt.outcome] : null;
+  const marketProbability =
+    receipt.outcome && receipt.outcome !== "pass" && receipt.market_implied
+      ? receipt.market_implied[receipt.outcome]
+      : null;
+  const marketGap =
+    pickedProbability != null && marketProbability != null
+      ? pickedProbability - marketProbability
+      : null;
 
   return (
     <div className="mt-3 border border-line bg-bg p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="mono text-[9px] uppercase tracking-[0.14em] text-faint">Decision receipt</div>
-          <div className="mt-1 font-display text-base font-extrabold uppercase leading-none text-ink">
-            {receipt.outcome === "pass"
-              ? "Passed"
-              : receipt.outcome
-                ? `${chosen} on ${shortOutcome(receipt.outcome, home, away)}`
-                : "Awaiting bet"}
+          <div className="mono text-[9px] uppercase tracking-[0.14em] text-faint">Decision lens</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className={`mono px-2 py-1 text-[10px] font-bold uppercase tracking-[0.1em] ${stance.className}`}>
+              {stance.label}
+            </span>
+            <span className="font-display text-base font-extrabold uppercase leading-none text-ink">
+              {receipt.outcome === "pass"
+                ? "Passed"
+                : receipt.outcome
+                  ? `${chosen} on ${shortOutcome(receipt.outcome, home, away)}`
+                  : "Awaiting bet"}
+            </span>
           </div>
+          <p className="mt-2 max-w-[52ch] text-[12px] leading-snug text-muted">{stance.summary}</p>
         </div>
         <div className="mono text-right text-[10px] uppercase tracking-[0.12em] text-faint">
-          target {receipt.matchday_target_pct.toFixed(0)}% / penalty {receipt.shortfall_penalty_pct.toFixed(1)}%
+          target {receipt.matchday_target_pct.toFixed(0)}%
+          {marketGap != null && (
+            <span className={marketGap >= 0 ? "block text-up" : "block text-down"}>
+              forecast {formatPp(marketGap)} vs price
+            </span>
+          )}
         </div>
-      </div>
-
-      <div className="mt-3 grid gap-px bg-line text-xs sm:grid-cols-3">
-        <ReceiptMetric
-          label="Blind forecast"
-          value={`${home.code ?? "H"} ${pct(receipt.probabilities.home, 0)} / D ${pct(receipt.probabilities.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.probabilities.away, 0)}`}
-        />
-        <ReceiptMetric
-          label="Market implied"
-          value={
-            receipt.market_implied
-              ? `${home.code ?? "H"} ${pct(receipt.market_implied.home, 0)} / D ${pct(receipt.market_implied.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.market_implied.away, 0)}`
-              : "no odds"
-          }
-        />
-        <ReceiptMetric label="Allowed bets" value={eligible} />
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {receipt.available_tiers.map((tier) => (
-          <span
-            key={tier}
-            className={`mono border px-2 py-1 text-[10px] font-bold uppercase ${
-              receipt.chosen_stake_pct === tier
-                ? "border-ink bg-ink text-surface"
-                : "border-line bg-surface text-muted"
-            }`}
-          >
-            {tier.toFixed(0)}%
-          </span>
-        ))}
       </div>
 
       {receipt.drivers.length > 0 && (
-        <ul className="mt-3 space-y-1.5">
-          {receipt.drivers.slice(0, 3).map((driver) => (
-            <li key={driver} className="flex gap-2 text-[12px] leading-snug text-muted">
-              <span className="mt-[0.35rem] h-1.5 w-1.5 shrink-0 bg-volt" />
-              <span>{driver}</span>
-            </li>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {receipt.drivers.slice(0, 2).map((driver) => (
+            <span key={driver} className="border border-line bg-surface px-2 py-1 text-[11px] leading-snug text-muted">
+              {shortDriver(driver)}
+            </span>
           ))}
-        </ul>
+        </div>
       )}
+
+      <details className="group mt-3 border-t border-line pt-3 [&_summary::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-ink hover:text-volt">
+          <span>Mechanics</span>
+          <CaretDown size={13} weight="bold" className="transition-transform group-open:rotate-180" />
+        </summary>
+
+        <div className="mt-3 grid gap-px bg-line text-xs sm:grid-cols-3">
+          <ReceiptMetric
+            label="Blind forecast"
+            value={`${home.code ?? "H"} ${pct(receipt.probabilities.home, 0)} / D ${pct(receipt.probabilities.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.probabilities.away, 0)}`}
+          />
+          <ReceiptMetric
+            label="Market implied"
+            value={
+              receipt.market_implied
+                ? `${home.code ?? "H"} ${pct(receipt.market_implied.home, 0)} / D ${pct(receipt.market_implied.draw, 0)} / ${away.code ?? "A"} ${pct(receipt.market_implied.away, 0)}`
+                : "no odds"
+            }
+          />
+          <ReceiptMetric label="Allowed bets" value={eligible} />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {receipt.available_tiers.map((tier) => (
+            <span
+              key={tier}
+              className={`mono border px-2 py-1 text-[10px] font-bold uppercase ${
+                receipt.chosen_stake_pct === tier
+                  ? "border-ink bg-ink text-surface"
+                  : "border-line bg-surface text-muted"
+              }`}
+            >
+              {tier.toFixed(0)}%
+            </span>
+          ))}
+        </div>
+
+        {receipt.drivers.length > 2 && (
+          <ul className="mt-3 space-y-1.5">
+            {receipt.drivers.slice(2).map((driver) => (
+              <li key={driver} className="flex gap-2 text-[12px] leading-snug text-muted">
+                <span className="mt-[0.35rem] h-1.5 w-1.5 shrink-0 bg-volt" />
+                <span>{driver}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
     </div>
   );
+}
+
+function decisionStance(
+  receipt: NonNullable<BoardEntry["decision_receipt"]>,
+  minTier: number,
+) {
+  if (receipt.engine_adjustment) {
+    return {
+      label: "Adjusted",
+      summary: "The model asked for something the engine had to correct before settlement.",
+      className: "bg-down text-surface",
+    };
+  }
+  if (receipt.outcome === "pass" || receipt.chosen_stake_pct === 0) {
+    return {
+      label: "No bet",
+      summary: "The model decided the eligible line did not deserve bankroll risk.",
+      className: "bg-line text-ink",
+    };
+  }
+  if (
+    receipt.chosen_stake_pct != null &&
+    Math.abs(receipt.chosen_stake_pct - receipt.matchday_target_pct) <= 0.1
+  ) {
+    return {
+      label: "Target bet",
+      summary: "The model used this match to satisfy the slate allocation target.",
+      className: "bg-volt text-surface",
+    };
+  }
+  if (receipt.chosen_stake_pct != null && receipt.chosen_stake_pct <= minTier + 0.1) {
+    return {
+      label: "Cautious minimum",
+      summary: "The model saw a playable favorite, but the price was too tight for conviction.",
+      className: "bg-ink text-surface",
+    };
+  }
+  return {
+    label: "Measured risk",
+    summary: "The model went above the minimum tier without filling the whole slate target.",
+    className: "bg-surface text-ink border border-line-strong",
+  };
+}
+
+function shortDriver(driver: string) {
+  if (driver.startsWith("Only ")) return "single eligible outcome";
+  if (driver.includes("market price was tighter")) return "price shorter than forecast";
+  if (driver.includes("minimum real stake")) return "minimum tier";
+  if (driver.includes("matched the matchday")) return "matched slate target";
+  if (driver.includes("accepted the request")) return "accepted unchanged";
+  if (driver.includes("above the market-implied")) return "forecast beat price";
+  return driver;
+}
+
+function formatPp(value: number) {
+  const points = value * 100;
+  return `${points >= 0 ? "+" : ""}${points.toFixed(0)}pp`;
 }
 
 function ReceiptMetric({ label, value }: { label: string; value: string }) {
