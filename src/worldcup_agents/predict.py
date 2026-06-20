@@ -136,18 +136,20 @@ choose among outcomes you already found plausible and to judge whether a price i
 fair, or mean — never to talk you onto a longshot you did not believe in. A big payout is not a \
 reason to bet; it is the compensation for a risk you must independently judge worth taking.
 - In a clear mismatch, a short favourite price is not by itself a reason to pass. If your \
-football case is strong but the price is merely fair or a little mean, use the minimum real \
-tier rather than sitting out. Pass only when the market badly overstates the side, the matchup \
-contains a concrete football trap, or your own forecast is genuinely thin.
+football case is strong, back it at a tier that reflects how strong — a one-sided match you are \
+confident in deserves real weight, not a token. Pass only when the market badly overstates the \
+side, the matchup contains a concrete football trap, or your own forecast is genuinely thin.
 - In a close match, let the price tip you — a co-favourite at a generous number can be the \
 smarter bet than the marginal favourite at a short one.
 - Passing is allowed, but it should be an active football call, not the default. Never invent \
 an angle to force a bet, and never back a side merely because its odds are long.
-- Size with conviction. You bet in fixed tiers — the bet prompt lists the ones open this round. \
-There are no token wagers: the minimum non-pass tier is real money. Choose the tier that \
-matches how strongly the football case AND the price line up: use the minimum tier only for a \
-modest but worthwhile football read at a tight price, push a larger tier when both are clearly \
-in your favour, and pass only when the bet does not deserve meaningful bankroll risk.
+- Size to your conviction — there is no default tier. You bet in fixed tiers; the bet prompt \
+lists the ones open this round, and the full range exists to be used. The right tier is the one \
+that matches how strongly your football read AND the price line up: lean on the lower tiers when \
+the edge is slim or the price is tight, and step up through the higher tiers as your conviction \
+and the value grow — a genuine strong read sized at the floor is money left on the table. The \
+floor is for marginal calls, not a safe habit; if a bet does not deserve meaningful risk, the \
+honest answer is to pass, not to shrink it to the minimum.
 - Manage the matchday as a portfolio. Each UTC matchday has a target amount of bankroll you \
 are expected to allocate across the slate; unallocated target budget is penalized at close. \
 You still should not force a bad bet, but if a line is playable, the portfolio target is a \
@@ -575,10 +577,14 @@ NOW the market 1X2 decimal odds (payout = stake x odds on a win):
 Your blind forecast is the football guardrail. An outcome is eligible only when its Step-1 \
 probability is within {BET_ELIGIBILITY_WINDOW:.0%} of your top read. For this match, the ONLY \
 eligible outcomes are: {eligible_line}. You may use the prices to choose among those outcomes, \
-or PASS. Any other pick will be rejected. If your Step-1 top outcome is clearly ahead, default \
-to at least the minimum tier unless you can name a concrete football or market reason it is \
-not worth meaningful bankroll risk. Do not invent a case just to wager, and do not choose a \
-longshot solely because its payout is large.
+or PASS. Any other pick will be rejected. Do not invent a case just to wager, and do not choose \
+a longshot solely because its payout is large.
+
+If you back an outcome, size the tier to your conviction — how strongly your read and the price \
+line up. There is no default tier and the floor is not a safe habit: the full ladder below is \
+there to be used, and a strong read backed at the minimum is value left on the table. Reserve \
+the floor for genuinely marginal calls; when a bet does not deserve meaningful bankroll risk, \
+pass outright rather than shrinking it to a token.
 
 Choose one fixed conviction tier for this {fixture.stage.value} match: {tier_line}. The stage \
 ceiling is {cap_fraction:.0%} of bankroll. A tier is a percentage of your current \

@@ -25,7 +25,9 @@ from pathlib import Path
 EXPERIMENT_PHASE = "phase_6_coherent_tier_betting"
 
 FORECAST_PROMPT_VERSION = "forecast_v3_calibrated_spread"
-BET_PROMPT_VERSION = "bet_v13_matchday_portfolio_betting"
+BET_PROMPT_VERSION = "bet_v14_conviction_sizing_no_floor_default"
+# Rules unchanged from v11 — v14 is a prompt-framing change only (removed the
+# minimum-tier-as-default anchor); segment analysis by BET_PROMPT_VERSION, not rules.
 BETTING_RULES_VERSION = "rules_v11_gap10_portfolio_targets_tiers5_10_15_20_25_30_exposure50"
 
 HUMAN_FORECAST_VERSION = "human_forecast_v1"
