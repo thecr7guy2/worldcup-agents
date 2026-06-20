@@ -10,6 +10,7 @@ import { Reveal } from "@/components/Reveal";
 import { MarketBar } from "@/components/MarketBar";
 import { Disagreement } from "@/components/Disagreement";
 import { Briefing } from "@/components/Briefing";
+import { PredictionCountdown } from "@/components/PredictionCountdown";
 
 export default async function FixturePage({
   params,
@@ -141,9 +142,16 @@ export default async function FixturePage({
         ) : (
           <>
             <Empty icon={Target} title={f.briefed ? "Predictions incoming" : "Briefing not yet built"}>
-              {f.briefed
-                ? "The dossier is ready. Model predictions appear here once they lock in, a few hours before kickoff."
-                : "This fixture's neutral briefing is assembled within 24 hours of kickoff. Predictions follow."}
+              {f.briefed ? (
+                <>
+                  <span className="block">
+                    The dossier is ready. Each model locks its prediction shortly before kickoff.
+                  </span>
+                  <PredictionCountdown kickoff={f.kickoff} />
+                </>
+              ) : (
+                "This fixture's neutral briefing is assembled within 24 hours of kickoff. Predictions follow."
+              )}
             </Empty>
             <div className="mt-6">
               <div className="mono mb-3 text-[11px] uppercase tracking-[0.16em] text-faint">
