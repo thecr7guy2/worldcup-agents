@@ -148,8 +148,8 @@ lists the ones open this round, and the full range exists to be used. The right 
 that matches how strongly your football read AND the price line up: lean on the lower tiers when \
 the edge is slim or the price is tight, and step up through the higher tiers as your conviction \
 and the value grow — a genuine strong read sized at the floor is money left on the table. The \
-floor is for marginal calls, not a safe habit; if a bet does not deserve meaningful risk, the \
-honest answer is to pass, not to shrink it to the minimum.
+floor is still a meaningful bet for a playable but marginal line, not a safe habit; if a line \
+does not deserve even that level of risk, the honest answer is to pass.
 - Manage the matchday as a portfolio. Each UTC matchday has a target amount of bankroll you \
 are expected to allocate across the slate; unallocated target budget is penalized at close. \
 You still should not force a bad bet, but if a line is playable, the portfolio target is a \
@@ -172,6 +172,24 @@ Your previous malformed answer was:
 --- PREVIOUS ANSWER ---
 {previous}
 --- END PREVIOUS ANSWER ---"""
+
+_BET_REQUEST_RETRY_INSTRUCTION = """
+
+BET REQUEST CORRECTION ONLY:
+Your previous JSON parsed, but the requested bet did not satisfy the contract:
+{problem}
+
+Do not reconsider the match. Preserve your football reasoning and intended side if it is
+legal; otherwise choose PASS. Return ONLY one valid JSON object using this exact schema:
+{{"pick": "home" | "draw" | "away" | "pass", "stake_pct": <one of 0, {tiers}>, "reasoning": "<same concise reasoning, adjusted only if needed>"}}
+
+Allowed non-pass picks for this match: {eligible}. If you pass, stake_pct must be 0. If you
+bet, stake_pct must be one of the listed non-zero tiers.
+
+Your previous invalid JSON was:
+--- PREVIOUS JSON ---
+{previous}
+--- END PREVIOUS JSON ---"""
 
 
 def _now() -> datetime:
@@ -462,6 +480,51 @@ def _parse_stake_tier(raw: object) -> float | None:
     )
 
 
+def _parse_bet_request(data: dict, bankroll: float) -> dict[str, object]:
+    """Normalize a model's requested bet and flag contract-level request errors."""
+    raw_pick = str(data.get("pick", "pass")).strip().lower()
+    pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
+    raw_tier = data.get("stake_pct", 0)
+    requested_fraction = _parse_stake_fraction(raw_tier)
+    tier = _parse_stake_tier(raw_tier)
+
+    invalid_request = raw_pick not in {"home", "draw", "away", "pass"}
+    invalid_tier = tier is None
+    if tier is None:
+        tier = 0.0
+    if not invalid_tier and (
+        (raw_pick == "pass" and tier > 0) or (pick is not None and tier <= 0)
+    ):
+        invalid_request = True
+
+    return {
+        "raw_pick": raw_pick,
+        "pick": pick,
+        "raw_tier": raw_tier,
+        "requested_fraction": requested_fraction,
+        "tier": tier,
+        "invalid_request": invalid_request,
+        "invalid_tier": invalid_tier,
+        "requested_pick": pick,
+        "requested_stake": bankroll * (requested_fraction or 0.0),
+    }
+
+
+def _bet_request_problem(
+    parsed: dict[str, object], available_tiers: tuple[float, ...]
+) -> str:
+    """Human-readable explanation for one semantic correction retry."""
+    tiers = "0, " + ", ".join(f"{tier * 100:.0f}" for tier in available_tiers)
+    raw_pick = parsed["raw_pick"]
+    raw_tier = parsed["raw_tier"]
+    if parsed["invalid_tier"]:
+        return f"stake_pct must be one of {tiers}; you gave {raw_tier!r}."
+    return (
+        "pick and stake_pct must agree: pass uses stake_pct 0, and a non-pass pick "
+        f"uses one listed non-zero tier. You gave pick={raw_pick!r}, stake_pct={raw_tier!r}."
+    )
+
+
 def _exposure_note(bankroll: float, open_stake: float, open_count: int) -> str:
     """One line telling the agent how much of its bankroll is already committed to other
     matches still awaiting a result, so it can size against its FREE balance instead of the
@@ -583,8 +646,9 @@ a longshot solely because its payout is large.
 If you back an outcome, size the tier to your conviction — how strongly your read and the price \
 line up. There is no default tier and the floor is not a safe habit: the full ladder below is \
 there to be used, and a strong read backed at the minimum is value left on the table. Reserve \
-the floor for genuinely marginal calls; when a bet does not deserve meaningful bankroll risk, \
-pass outright rather than shrinking it to a token.
+the floor for genuinely marginal but playable calls; 5% is still a meaningful bet, so do not \
+pass merely because the line does not justify 10% or more. When a bet does not deserve even \
+the floor, pass outright rather than shrinking it to a token.
 
 Choose one fixed conviction tier for this {fixture.stage.value} match: {tier_line}. The stage \
 ceiling is {cap_fraction:.0%} of bankroll. A tier is a percentage of your current \
@@ -598,9 +662,9 @@ Respond with ONLY a JSON object, no other text:
 matchups, tactics, team news) and why the selected eligible outcome is or is not worth its \
 price, then why this conviction tier fits. Lead with football, not formulas>"}}"""
 
-    # A malformed response gets one format-only retry. Both calls are logged, and the final
-    # Bet links to the successful attempt's generation ID. Semantic rule violations are not
-    # retried; the engine handles those deterministically below.
+    # A malformed response gets one format-only retry. A parsed but contract-invalid request
+    # then gets one correction retry; ineligible football picks still fail closed below.
+    # Every call is logged, and the final Bet links to the accepted/final attempt.
     retry_prompt = prompt
     data: dict | None = None
     call = None
@@ -632,24 +696,42 @@ price, then why this conviction tier fits. Lead with football, not formulas>"}}"
             )
 
     assert data is not None and call is not None
-    raw_pick = str(data.get("pick", "pass")).strip().lower()
+    parsed = _parse_bet_request(data, bankroll)
+    if parsed["invalid_tier"] or parsed["invalid_request"]:
+        if _now() >= fixture.kickoff:
+            raise KickoffPassed(
+                f"{model.name}: kickoff passed before correcting bet {fixture.id}"
+            )
+        problem = _bet_request_problem(parsed, available_tiers)
+        retry_prompt = prompt + _BET_REQUEST_RETRY_INSTRUCTION.format(
+            problem=problem,
+            tiers=", ".join(f"{tier * 100:.0f}" for tier in available_tiers),
+            eligible=eligible_line,
+            previous=str(data)[:2000],
+        )
+        text, call = complete(
+            model.model_id,
+            retry_prompt,
+            model_name=model.name,
+            step="bet",
+            fixture_id=fixture.id,
+            system=SYSTEM_GAMBLER,
+            max_tokens=25000,
+            temperature=0.5,
+            reasoning_effort="high",
+        )
+        db.log_model_call(conn, call)
+        data = extract_json(text)
+        parsed = _parse_bet_request(data, bankroll)
+
     reasoning = str(data.get("reasoning", "")).strip()
-    pick = Outcome(raw_pick) if raw_pick in {"home", "draw", "away"} else None
-    raw_tier = data.get("stake_pct", 0)
-    requested_fraction = _parse_stake_fraction(raw_tier)
-    tier = _parse_stake_tier(raw_tier)
+    pick = parsed["pick"]
+    tier = parsed["tier"]
+    invalid_request = bool(parsed["invalid_request"])
+    invalid_tier = bool(parsed["invalid_tier"])
 
-    invalid_request = raw_pick not in {"home", "draw", "away", "pass"}
-    invalid_tier = tier is None
-    if tier is None:
-        tier = 0.0
-    if not invalid_tier and (
-        (raw_pick == "pass" and tier > 0) or (pick is not None and tier <= 0)
-    ):
-        invalid_request = True
-
-    requested_pick = pick
-    requested_stake = bankroll * (requested_fraction or 0.0)
+    requested_pick = parsed["requested_pick"]
+    requested_stake = parsed["requested_stake"]
     engine_adjustment: str | None = None
 
     if invalid_tier:

@@ -307,7 +307,8 @@ def main() -> None:
     def inspect_bet_prompt(prompt: str) -> None:
         """Assert that the betting prompt exposes only allowed information."""
         assert "ONLY eligible outcomes are: away (Scotland) 53%" in prompt
-        assert "default to at least the minimum tier" in prompt
+        assert "5% is still a meaningful bet" in prompt
+        assert "There is no default tier" in prompt
         assert "MATCHDAY PORTFOLIO" in prompt
         assert "target allocation is 15%" in prompt
         assert "stake_pct" in prompt

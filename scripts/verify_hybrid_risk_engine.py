@@ -333,6 +333,46 @@ def main() -> None:
         "malformed JSON retries once, logs both calls, then succeeds or fails loudly: PASS"
     )
 
+    conn, fixture = _setup()
+    semantic_stub, semantic_state = _completion_sequence(
+        [
+            {
+                "pick": "away",
+                "stake": 5,
+                "reasoning": "Scotland are playable, but I used the wrong key.",
+            },
+            {
+                "pick": "away",
+                "stake_pct": 5,
+                "reasoning": "Scotland are playable at the floor tier.",
+            },
+        ],
+        "semantic-retry",
+    )
+    engine.complete = semantic_stub
+    corrected = engine.bet(
+        conn,
+        MODEL,
+        fixture,
+        clear,
+        ODDS,
+        BANKROLL,
+        "Haiti",
+        "Scotland",
+        force=True,
+    )
+    assert corrected.pick == Outcome.AWAY and corrected.stake == 50_000
+    assert corrected.engine_adjustment is None
+    assert corrected.call_generation_id == "semantic-retry-1"
+    assert semantic_state["calls"] == 2
+    assert "BET REQUEST CORRECTION ONLY" in semantic_state["prompts"][1]
+    logged = conn.execute(
+        "SELECT COUNT(*) FROM model_call WHERE model_name = ? AND fixture_id = ?",
+        (MODEL.name, FIXTURE_ID),
+    ).fetchone()[0]
+    assert logged == 2
+    print("semantic bet-request slips retry once before fail-closed enforcement: PASS")
+
     assert stage_stake_tiers(Stage.GROUP.value) == (
         0.05,
         0.10,
