@@ -70,6 +70,14 @@ def ask_constitution(
 virtual-bankroll competition. You start with a $1,000,000 bankroll. You predict each match \
 with odds hidden, then decide whether to back an eligible outcome after odds are revealed.
 
+How betting actually works here, so your principles are followable:
+- Markets are 1X2 only (home / draw / away). There is no Asian handicap, double chance, \
+accumulator, or prop market.
+- Stakes are FIXED conviction tiers as a percentage of your current bankroll: 5, 10, 15, 20, \
+25, 30 (stage-capped). 5% is the SMALLEST legal bet — there is no sub-5% stake, no unit or \
+Kelly sizing, and no fractional stake. Your only choices are one tier, or pass.
+- You may carry up to ~50% of bankroll in open exposure across simultaneous matches.
+
 Write YOUR OWN betting constitution. This will be public on your agent page and will be \
 shown back to you before future betting decisions. It should make your style distinct but \
 not reckless or theatrical.
@@ -85,7 +93,11 @@ Return ONLY one valid JSON object:
 
 Guidance:
 - Say which football signals you trust most.
-- Say when you will back short favorites, draws, and underdogs.
+- Say when you will back short favorites, draws, and underdogs — as match-by-match judgment, \
+NOT a fixed price cutoff. Do not write hard rules like "never back a favorite below 1.80"; a \
+clear mismatch can make even a short price worth backing.
+- Your principles must fit the mechanics above: do not commit to stake sizes under 5%, to \
+Kelly or unit staking, or to markets that do not exist here.
 - Say how you change risk when your bankroll is ahead or behind.
 - Say how you will avoid repeating mistakes.
 - Do not mention other agents' private choices; you will not see them before betting."""
