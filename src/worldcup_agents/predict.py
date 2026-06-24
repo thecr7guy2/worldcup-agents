@@ -33,6 +33,12 @@ from . import db, memory
 from .config import (
     BET_ELIGIBILITY_WINDOW,
     BET_STAKE_TIERS,
+    BET_VALUE_EDGE_SLOPE,
+    BET_VALUE_MAX_GAP,
+    BET_VALUE_MIN_EDGE,
+    BET_VALUE_MIN_MARKET_PROBABILITY,
+    BET_VALUE_MIN_PROBABILITY,
+    BET_VALUE_MIN_RATIO,
     MATCHDAY_SHORTFALL_PENALTY_FRACTION,
     MAX_AGGREGATE_EXPOSURE,
     PREDICT_MAX_WORKERS,
@@ -437,15 +443,62 @@ def _prediction_probabilities(prediction: Prediction) -> dict[Outcome, float]:
     return {prediction.winner: prediction.confidence}
 
 
-def _eligible_outcomes(prediction: Prediction) -> dict[Outcome, float]:
-    """Outcomes within the configured probability window of the blind top read."""
-    probabilities = _prediction_probabilities(prediction)
-    top = max(probabilities.values())
-    return {
-        outcome: probability
-        for outcome, probability in probabilities.items()
-        if top - probability <= BET_ELIGIBILITY_WINDOW + 1e-12
+def _implied_probabilities(odds: OddsSnapshot) -> dict[Outcome, float]:
+    """No-vig market probabilities from the Step-2 decimal odds (normalized 1/odds)."""
+    raw = {
+        Outcome.HOME: 1.0 / odds.home,
+        Outcome.DRAW: 1.0 / odds.draw,
+        Outcome.AWAY: 1.0 / odds.away,
     }
+    overround = sum(raw.values())
+    return {outcome: prob / overround for outcome, prob in raw.items()}
+
+
+def _value_edge_floor(gap: float) -> float:
+    """Minimum price edge (p - q) the value lane demands at this gap below the top read.
+
+    Flat BET_VALUE_MIN_EDGE up to the coherence boundary, then rising by BET_VALUE_EDGE_SLOPE
+    per extra point of gap: the further a pick sits from the model's own read, the more market
+    generosity it must show before price alone may make it eligible.
+    """
+    return BET_VALUE_MIN_EDGE + BET_VALUE_EDGE_SLOPE * max(
+        0.0, gap - BET_ELIGIBILITY_WINDOW
+    )
+
+
+def _eligible_outcomes(
+    prediction: Prediction, odds: OddsSnapshot
+) -> dict[Outcome, dict[str, object]]:
+    """Outcomes the model may back, via either of two lanes.
+
+    Coherence lane: blind Step-1 probability within BET_ELIGIBILITY_WINDOW of the top read.
+    Value lane: an outcome the model still rates a real possibility whose no-vig market price
+    is meaningfully more generous than its own read (see the BET_VALUE_* constants). The value
+    lane re-opens genuine value underdogs/draws without resurrecting longshots or bets against
+    the model's own read.
+
+    Each entry records the blind probability, the market-implied probability, and the lane that
+    qualified it (coherence wins ties) for prompt display and the auto-pass message.
+    """
+    probabilities = _prediction_probabilities(prediction)
+    implied = _implied_probabilities(odds)
+    top = max(probabilities.values())
+    eligible: dict[Outcome, dict[str, object]] = {}
+    for outcome, p in probabilities.items():
+        gap = top - p
+        q = implied.get(outcome)
+        if gap <= BET_ELIGIBILITY_WINDOW + 1e-12:
+            eligible[outcome] = {"p": p, "q": q, "lane": "coherence"}
+        elif (
+            q is not None
+            and p >= BET_VALUE_MIN_PROBABILITY
+            and q >= BET_VALUE_MIN_MARKET_PROBABILITY
+            and gap <= BET_VALUE_MAX_GAP + 1e-12
+            and p / q >= BET_VALUE_MIN_RATIO
+            and (p - q) >= _value_edge_floor(gap) - 1e-12
+        ):
+            eligible[outcome] = {"p": p, "q": q, "lane": "value"}
+    return eligible
 
 
 def _parse_stake_fraction(raw: object) -> float | None:
@@ -590,7 +643,7 @@ def bet(
 
     cap_fraction = stage_cap_fraction(fixture.stage.value)
     available_tiers = stage_stake_tiers(fixture.stage.value)
-    eligible = _eligible_outcomes(prediction)
+    eligible = _eligible_outcomes(prediction, odds)
 
     # What this model has already committed to other still-unsettled matches. This
     # read-then-write is not atomic. The live timer processes fixtures sequentially, so a
@@ -616,8 +669,13 @@ def bet(
         Outcome.AWAY: f"away ({away})",
     }
     eligible_line = ", ".join(
-        f"{names[outcome]} {probability:.0%}"
-        for outcome, probability in eligible.items()
+        f"{names[outcome]} {info['p']:.0%}"
+        + (
+            f" (value: market ~{info['q']:.0%})"
+            if info["lane"] == "value" and info["q"] is not None
+            else ""
+        )
+        for outcome, info in eligible.items()
     )
     tier_line = ", ".join(f"{tier:.0%}" for tier in available_tiers)
     bet_memory = memory.betting_memory_block(conn, model.name, fixture)
@@ -637,11 +695,14 @@ NOW the market 1X2 decimal odds (payout = stake x odds on a win):
   draw:          {odds.draw}
   away ({away}): {odds.away}
 
-Your blind forecast is the football guardrail. An outcome is eligible only when its Step-1 \
-probability is within {BET_ELIGIBILITY_WINDOW:.0%} of your top read. For this match, the ONLY \
-eligible outcomes are: {eligible_line}. You may use the prices to choose among those outcomes, \
-or PASS. Any other pick will be rejected. Do not invent a case just to wager, and do not choose \
-a longshot solely because its payout is large.
+Your blind forecast is the football guardrail. An outcome is eligible to back in one of two \
+ways: it is close to your top read (within {BET_ELIGIBILITY_WINDOW:.0%}), or it is a value \
+outcome — one you still rated a real possibility whose market price is meaningfully more \
+generous than your own read implies. For this match, the ONLY eligible outcomes are: \
+{eligible_line}. A "(value: market ~X%)" tag means the price, not the football alone, is what \
+makes it playable: back it when your read and that generous price genuinely line up, but never \
+chase it for the payout. You may use the prices to choose among the eligible outcomes, or PASS. \
+Any other pick will be rejected. Do not invent a case just to wager.
 
 If you back an outcome, size the tier to your conviction — how strongly your read and the price \
 line up. There is no default tier and the floor is not a safe habit: the full ladder below is \
@@ -745,8 +806,9 @@ price, then why this conviction tier fits. Lead with football, not formulas>"}}"
         probability = _prediction_probabilities(prediction).get(pick, 0.0)
         gap = top - probability
         reasoning = (
-            f"{reasoning}  [auto-pass: {pick.value} was {gap:.0%} below the blind "
-            f"top read, outside the {BET_ELIGIBILITY_WINDOW:.0%} eligibility window]"
+            f"{reasoning}  [auto-pass: {pick.value} was {gap:.0%} below the blind top "
+            f"read and cleared neither the {BET_ELIGIBILITY_WINDOW:.0%} coherence window "
+            f"nor the value-price test, so it was not an eligible outcome]"
         ).strip()
         engine_adjustment = "ineligible_pick"
         pick = None

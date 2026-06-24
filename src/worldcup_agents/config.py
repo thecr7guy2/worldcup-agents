@@ -88,6 +88,27 @@ STARTING_BANKROLL = 1_000_000.0  # each competitor starts here
 # plausible outcomes, but cannot turn a clearly unlikely longshot into a large wager.
 BET_ELIGIBILITY_WINDOW = 0.10
 
+# Second eligibility lane ("value"): an outcome the model still rates a real possibility
+# whose no-vig market price is meaningfully more generous than its own blind read. This
+# re-opens genuine value underdogs/draws that the coherence window alone would block,
+# WITHOUT resurrecting longshot-chasing or bets against the model's own read:
+#  - BET_VALUE_MIN_PROBABILITY: the model must itself rate the outcome at least this likely.
+#  - BET_VALUE_MIN_MARKET_PROBABILITY: refuse true longshots even when the model overrates
+#    them (market-implied prob floor; ~odds 8.3 at 0.12).
+#  - BET_VALUE_MAX_GAP: a value pick may sit at most this far below the top read, so price
+#    can never revive an outcome the model treated as clearly secondary.
+#  - BET_VALUE_MIN_RATIO: the model's read must beat the price by at least this multiple.
+#  - required edge (p - q) scales with the gap: BET_VALUE_MIN_EDGE at the coherence boundary,
+#    rising BET_VALUE_EDGE_SLOPE per extra point of gap — departing further from your own read
+#    demands proportionally more market evidence.
+# Sizing is unchanged: fixed conviction tiers, stage cap, aggregate-exposure cap. No Kelly/EV.
+BET_VALUE_MIN_PROBABILITY = 0.25
+BET_VALUE_MIN_MARKET_PROBABILITY = 0.12
+BET_VALUE_MAX_GAP = 0.25
+BET_VALUE_MIN_RATIO = 1.15
+BET_VALUE_MIN_EDGE = 0.06
+BET_VALUE_EDGE_SLOPE = 0.25
+
 # Fixed conviction tiers. The prompt offers only the tiers allowed by the current stage;
 # the engine validates them and converts the chosen percentage into dollars. The smallest
 # non-pass tier is intentionally 5%: lower "token" bets proved too easy for agents to hide

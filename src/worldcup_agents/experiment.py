@@ -25,12 +25,14 @@ from pathlib import Path
 EXPERIMENT_PHASE = "phase_6_coherent_tier_betting"
 
 FORECAST_PROMPT_VERSION = "forecast_v3_calibrated_spread"
-BET_PROMPT_VERSION = "bet_v15_playable_floor_semantic_retry"
-# Rules unchanged from v11 — v15 is still prompt/output-boundary framing only:
-# no minimum-tier default, but the 5% floor is explicitly a valid playable-line tier,
-# and schema/tier slips get one correction retry before deterministic enforcement.
+BET_PROMPT_VERSION = "bet_v16_value_lane_no_vig"
+# v12 adds a second eligibility lane to the gap-10 coherence gate: an outcome the model still
+# rates a real possibility whose no-vig market price beats its own blind read by a gap-scaled
+# margin is also bettable (BET_VALUE_* constants). Re-opens genuine value underdogs/draws
+# without longshot-chasing or bets against the model's read. Sizing unchanged (fixed tiers,
+# stage cap, 50% exposure). The bet prompt now labels value-lane outcomes for the model.
 BETTING_RULES_VERSION = (
-    "rules_v11_gap10_portfolio_targets_tiers5_10_15_20_25_30_exposure50"
+    "rules_v12_gap10_plus_value_lane_tiers5_10_15_20_25_30_exposure50"
 )
 
 HUMAN_FORECAST_VERSION = "human_forecast_v1"
