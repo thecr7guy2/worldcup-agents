@@ -12,12 +12,12 @@ from datetime import datetime, timezone
 
 from .. import db, leaderboard
 from ..config import (
-    BET_ELIGIBILITY_WINDOW,
     CHALLENGER_PUBLIC,
     MATCHDAY_SHORTFALL_PENALTY_FRACTION,
     MAX_LIVES,
     MAX_STAKE_FRACTION,
     STARTING_BANKROLL,
+    eligible_outcomes,
     stage_matchday_target_fraction,
     stage_stake_tiers,
 )
@@ -242,6 +242,17 @@ def _market_implied(odds: dict | None) -> dict[str, float] | None:
         return None
 
 
+def _no_vig_implied(odds: dict | None) -> dict[str, float] | None:
+    """Vig-normalized market probabilities — the value-lane input the engine uses."""
+    raw = _market_implied(odds)
+    if not raw:
+        return None
+    overround = sum(raw.values())
+    if overround <= 0:
+        return None
+    return {key: prob / overround for key, prob in raw.items()}
+
+
 def _decision_receipt(
     fixture: Fixture,
     prediction: dict | None,
@@ -257,14 +268,9 @@ def _decision_receipt(
     if prediction is None:
         return None
     probs = _probabilities(prediction)
-    eligible: list[str] = []
-    if probs:
-        top = max(probs.values())
-        eligible = [
-            outcome
-            for outcome, probability in probs.items()
-            if top - probability <= BET_ELIGIBILITY_WINDOW + 1e-12
-        ]
+    eligibility = eligible_outcomes(probs, _no_vig_implied(odds))
+    eligible: list[str] = list(eligibility)
+    value_eligible = [o for o, info in eligibility.items() if info["lane"] == "value"]
 
     chosen_pct = _chosen_stake_pct(bet_response_text)
     target = stage_matchday_target_fraction(fixture.stage.value)
@@ -280,6 +286,12 @@ def _decision_receipt(
         else:
             drivers.append(
                 "Eligible from blind forecast: " + ", ".join(eligible) + "."
+            )
+        if value_eligible:
+            drivers.append(
+                "Value lane opened on a generous price vs the blind read: "
+                + ", ".join(value_eligible)
+                + "."
             )
     if pick and pick in probs:
         implied = (_market_implied(odds) or {}).get(pick)

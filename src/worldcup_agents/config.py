@@ -109,6 +109,48 @@ BET_VALUE_MIN_RATIO = 1.15
 BET_VALUE_MIN_EDGE = 0.06
 BET_VALUE_EDGE_SLOPE = 0.25
 
+
+def value_edge_floor(gap: float) -> float:
+    """Minimum price edge (model_p - market_q) the value lane demands at this gap below the
+    top read: flat BET_VALUE_MIN_EDGE up to the coherence boundary, then rising by
+    BET_VALUE_EDGE_SLOPE per extra point of gap."""
+    return BET_VALUE_MIN_EDGE + BET_VALUE_EDGE_SLOPE * max(0.0, gap - BET_ELIGIBILITY_WINDOW)
+
+
+def eligible_outcomes(probabilities: dict, implied: dict | None) -> dict:
+    """The single source of truth for Step-2 betting eligibility (two lanes).
+
+    Key-agnostic so both the prediction engine (Outcome-keyed) and the web decision receipts
+    (string-keyed) share one rule and cannot drift:
+    - `probabilities`: the blind Step-1 distribution over outcome keys.
+    - `implied`: the NO-VIG (normalized) market distribution over the same keys, or None to
+      disable the value lane (e.g. legacy rows without odds).
+
+    Returns {key: {"p": blind_prob, "q": implied_prob | None, "lane": "coherence"|"value"}}.
+    Coherence wins ties. An outcome qualifies via the value lane only when the model still
+    rates it a real possibility AND the price is generous enough relative to its own read,
+    with the required edge scaled by how far it sits from the top read.
+    """
+    if not probabilities:
+        return {}
+    top = max(probabilities.values())
+    eligible: dict = {}
+    for key, p in probabilities.items():
+        gap = top - p
+        q = implied.get(key) if implied else None
+        if gap <= BET_ELIGIBILITY_WINDOW + 1e-12:
+            eligible[key] = {"p": p, "q": q, "lane": "coherence"}
+        elif (
+            q is not None
+            and p >= BET_VALUE_MIN_PROBABILITY
+            and q >= BET_VALUE_MIN_MARKET_PROBABILITY
+            and gap <= BET_VALUE_MAX_GAP + 1e-12
+            and p / q >= BET_VALUE_MIN_RATIO
+            and (p - q) >= value_edge_floor(gap) - 1e-12
+        ):
+            eligible[key] = {"p": p, "q": q, "lane": "value"}
+    return eligible
+
 # Fixed conviction tiers. The prompt offers only the tiers allowed by the current stage;
 # the engine validates them and converts the chosen percentage into dollars. The smallest
 # non-pass tier is intentionally 5%: lower "token" bets proved too easy for agents to hide

@@ -33,17 +33,12 @@ from . import db, memory
 from .config import (
     BET_ELIGIBILITY_WINDOW,
     BET_STAKE_TIERS,
-    BET_VALUE_EDGE_SLOPE,
-    BET_VALUE_MAX_GAP,
-    BET_VALUE_MIN_EDGE,
-    BET_VALUE_MIN_MARKET_PROBABILITY,
-    BET_VALUE_MIN_PROBABILITY,
-    BET_VALUE_MIN_RATIO,
     MATCHDAY_SHORTFALL_PENALTY_FRACTION,
     MAX_AGGREGATE_EXPOSURE,
     PREDICT_MAX_WORKERS,
     PREDICTION_MODELS,
     ModelSpec,
+    eligible_outcomes,
     stage_cap_fraction,
     stage_matchday_target_fraction,
     stage_stake_tiers,
@@ -454,51 +449,18 @@ def _implied_probabilities(odds: OddsSnapshot) -> dict[Outcome, float]:
     return {outcome: prob / overround for outcome, prob in raw.items()}
 
 
-def _value_edge_floor(gap: float) -> float:
-    """Minimum price edge (p - q) the value lane demands at this gap below the top read.
-
-    Flat BET_VALUE_MIN_EDGE up to the coherence boundary, then rising by BET_VALUE_EDGE_SLOPE
-    per extra point of gap: the further a pick sits from the model's own read, the more market
-    generosity it must show before price alone may make it eligible.
-    """
-    return BET_VALUE_MIN_EDGE + BET_VALUE_EDGE_SLOPE * max(
-        0.0, gap - BET_ELIGIBILITY_WINDOW
-    )
-
-
 def _eligible_outcomes(
     prediction: Prediction, odds: OddsSnapshot
 ) -> dict[Outcome, dict[str, object]]:
-    """Outcomes the model may back, via either of two lanes.
+    """Outcomes the model may back at Step 2, via either the coherence or value lane.
 
-    Coherence lane: blind Step-1 probability within BET_ELIGIBILITY_WINDOW of the top read.
-    Value lane: an outcome the model still rates a real possibility whose no-vig market price
-    is meaningfully more generous than its own read (see the BET_VALUE_* constants). The value
-    lane re-opens genuine value underdogs/draws without resurrecting longshots or bets against
-    the model's own read.
-
-    Each entry records the blind probability, the market-implied probability, and the lane that
-    qualified it (coherence wins ties) for prompt display and the auto-pass message.
+    Thin wrapper over the shared, key-agnostic rule in config.eligible_outcomes: the blind
+    Step-1 distribution and the no-vig market distribution are the only inputs, so the engine
+    and the public decision receipts can never disagree about what was eligible.
     """
-    probabilities = _prediction_probabilities(prediction)
-    implied = _implied_probabilities(odds)
-    top = max(probabilities.values())
-    eligible: dict[Outcome, dict[str, object]] = {}
-    for outcome, p in probabilities.items():
-        gap = top - p
-        q = implied.get(outcome)
-        if gap <= BET_ELIGIBILITY_WINDOW + 1e-12:
-            eligible[outcome] = {"p": p, "q": q, "lane": "coherence"}
-        elif (
-            q is not None
-            and p >= BET_VALUE_MIN_PROBABILITY
-            and q >= BET_VALUE_MIN_MARKET_PROBABILITY
-            and gap <= BET_VALUE_MAX_GAP + 1e-12
-            and p / q >= BET_VALUE_MIN_RATIO
-            and (p - q) >= _value_edge_floor(gap) - 1e-12
-        ):
-            eligible[outcome] = {"p": p, "q": q, "lane": "value"}
-    return eligible
+    return eligible_outcomes(
+        _prediction_probabilities(prediction), _implied_probabilities(odds)
+    )
 
 
 def _parse_stake_fraction(raw: object) -> float | None:
