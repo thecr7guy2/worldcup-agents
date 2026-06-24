@@ -55,9 +55,11 @@ separating football judgment from money judgment, so the payout never biases the
   Pure handicapping, uninfluenced by the market.
 - **Step 2 — BET** (same model, now shown odds + bankroll): takes its own step-1 prediction
   + the 1X2 odds + current bankroll → an eligible `{pick, stake_pct}` **or pass**. An outcome
-  is eligible only when its immutable Step-1 probability is within 10 percentage points of
-  the model's top read. Odds can choose among those football-plausible outcomes, but cannot
-  turn a clearly unlikely longshot into a bet. The engine never substitutes a pick.
+  is eligible via either of two lanes: it is within 10 percentage points of the model's top
+  read (coherence), or it is a "value" outcome the model still rates a real chance whose no-vig
+  market price is meaningfully more generous than its own read (Phase 6.2 below). Odds can
+  choose among those football-plausible outcomes, but cannot turn a clearly unlikely longshot
+  into a bet. The engine never substitutes a pick.
 
 Every new prediction and bet also persists an explicit experiment phase, prompt/rules
 version, requested model ID, OpenRouter generation ID, and Git revision. Bets additionally
@@ -76,6 +78,25 @@ football guardrail. Let `p_top` be the highest Step-1 probability; outcome `i` i
 when `p_top - p_i <= 0.10`. The model may choose any eligible outcome after seeing the odds,
 or pass. This preserves a value bet on a genuine close second (`40/25/35`) while blocking a
 large wager on an outcome the same model rated clearly unlikely (`53/26/21`).
+
+**Value lane (Phase 6.2).** The pure coherence gate keys off the model's own distribution
+alone, so in any lopsided match only the favorite survives — live data showed the engine had
+collapsed to favorite-only betting (30 favorites / 0 underdogs / 0 draws across one rules
+version), the mirror of the Phase-5 longshot-only failure. The agents' own constitutions
+already promised value betting on all three outcomes; the gate made it mechanically
+impossible. A second eligibility lane fixes the mismatch: outcome `i` is *also* bettable when
+the model still rates it a real chance whose price is clearly more generous than its own read.
+All of: `p_i ≥ 0.25`; no-vig market `q_i ≥ 0.12` (refuse true longshots even when overrated);
+`p_top − p_i ≤ 0.25` (price can never revive an outcome the model rated clearly secondary);
+`p_i / q_i ≥ 1.15`; and `p_i − q_i ≥ 0.06 + 0.25·max(0, gap − 0.10)` — the required edge scales
+with distance from the top read, so departing further from your own football read demands
+proportionally more market evidence. Sizing is unchanged (fixed tiers, no Kelly/EV). Odds enter
+only at Step 2, so the blind Step-1 read stays the untouched source of the model's
+probabilities. The single rule lives in `config.eligible_outcomes`; the bet prompt and the
+public decision receipts both consume it (labeling value-lane picks `value: market ~X%`) so
+the site can never drift from the engine. Backtest over 308 historical decisions: the lane
+opened in 5.8% of them, exclusively underdogs (13) and draws (8), never a favorite; the gap
+cap blocked ~47 would-be picks that ran against the model's own read.
 
 Stake sizing uses fixed conviction tiers instead of Kelly or an EV formula:
 

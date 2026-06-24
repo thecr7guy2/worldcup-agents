@@ -76,6 +76,10 @@ accumulator, or prop market.
 - Stakes are FIXED conviction tiers as a percentage of your current bankroll: 5, 10, 15, 20, \
 25, 30 (stage-capped). 5% is the SMALLEST legal bet — there is no sub-5% stake, no unit or \
 Kelly sizing, and no fractional stake. Your only choices are one tier, or pass.
+- You may only back an outcome your own odds-hidden forecast supports: one close to your top \
+read, OR one you still rate a real chance whose price is clearly more generous than your read \
+implies (a "value" pick). An outcome you yourself judged unlikely can never be made bettable by \
+its payout alone — so a longshot is only ever in play when YOU rate it live, never for the odds.
 - You may carry up to ~50% of bankroll in open exposure across simultaneous matches.
 
 Write YOUR OWN betting constitution. This will be public on your agent page and will be \
